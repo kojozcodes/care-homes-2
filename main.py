@@ -120,7 +120,7 @@ def fetch_awareness_days(year, month):
 # -------------------------
 # Core: Build calendar day mapping
 # -------------------------
-def seat_activity_into_calendar(year, month, activities_df, rota_df, rules, include_holidays=True):
+def seat_activity_into_calendar(year, month, activities_df, rota_df, rules, include_holidays=True, daily_rules=None):
     first, last = month_date_range(year, month)
     daymap = {first + dt.timedelta(days=i): [] for i in range((last - first).days + 1)}
 
@@ -171,6 +171,17 @@ def seat_activity_into_calendar(year, month, activities_df, rota_df, rules, incl
         for d in daymap:
             if d.weekday() == rule["weekday"]:
                 fixed_rules.append({"date": d, "time": rule.get("time"), "title": clean_text(rule["title"]), "notes": "fixed"})
+
+    # 3️⃣b Fixed Daily Rules
+    if daily_rules:
+        for d in daymap:
+            for rule in daily_rules:
+                daymap[d].append({
+                    "date": d,
+                    "time": rule.get("time"),
+                    "title": clean_text(rule["title"]),
+                    "notes": "fixed daily"
+                })
 
     # 4️⃣ Regular Activities
     activities = []
@@ -262,56 +273,71 @@ def draw_calendar_pdf(title, disclaimer, year, month, cell_texts, background_byt
             st.warning(f"Background load failed: {e}")
 
     # --------------------------
-    # Header (Month & Year + Disclaimer with pill background)
+    # Header (Month & Year + Disclaimer, each with pill background)
     # --------------------------
     title_text = clean_text(title)
     disclaimer_text = clean_text(disclaimer)
 
-    # Measure title width dynamically
+    # === Month Pill ===
     title_font = "Helvetica-Bold"
-    title_size = 30
+    title_size = 20
     c.setFont(title_font, title_size)
     title_width = c.stringWidth(title_text, title_font, title_size)
 
-    # Proportional padding (scales with text width, looks balanced)
-    padding_ratio = 0.35  # 35% of text width as side padding
-    pill_padding = max(20 * mm, title_width * padding_ratio)
-
-    # Keep your existing height, position, and roundness
-    pill_w = title_width + pill_padding
-    pill_h = 15 * mm                      # your existing height
-    pill_y = height - 16 * mm             # your existing vertical position
+    # Pill dimensions and position
+    side_padding = 15 * mm
+    vertical_padding = 4 * mm
+    pill_w = title_width + side_padding
+    pill_h = 4 * mm + vertical_padding
+    pill_y = height - 10 * mm  # move up slightly
     pill_x = (width - pill_w) / 2
 
-    # Draw pill (semi-transparent black, rounded)
-    pill_color = Color(0, 0, 0, alpha=0.75)
-    c.setFillColor(pill_color)
-    c.roundRect(pill_x, pill_y, pill_w, pill_h, 8 * mm, fill=1, stroke=0)
+    # Draw month pill (black background, rounded)
+    month_pill_color = Color(0, 0, 0)
+    c.setFillColor(month_pill_color)
+    c.roundRect(pill_x, pill_y, pill_w, pill_h, pill_h / 2, fill=1, stroke=0)
 
-    # Draw title text (centered white)
+    # Draw month text (white)
     c.setFillColor(white)
-    c.setFont(title_font, title_size)
-    c.drawCentredString(width / 2, pill_y + 4 * mm, title_text)
+    text_y = pill_y + (pill_h / 2) - (title_size / 3.2)
+    c.drawCentredString(width / 2, text_y, title_text)
 
-    # Draw disclaimer (just below, black text)
-    c.setFont("Helvetica-Bold", 12)
-    c.setFillColor(black)
-    c.drawCentredString(width / 2, pill_y - 5 * mm, disclaimer_text)
+    # === Disclaimer Pill ===
+    disclaimer_font = "Helvetica-Bold"
+    disclaimer_size = 11
+    c.setFont(disclaimer_font, disclaimer_size)
+    disclaimer_width = c.stringWidth(disclaimer_text, disclaimer_font,
+                                     disclaimer_size)
 
+    disc_padding_x = 10 * mm
+    disc_padding_y = 1 * mm
+    disc_w = disclaimer_width + disc_padding_x
+    disc_h = 6 * mm + disc_padding_y
+    disc_x = (width - disc_w) / 2
+    disc_y = pill_y - disc_h - 0.5 * mm  # small gap below the month pill
 
+    # Draw disclaimer pill (light grey)
+    disc_pill_color = Color(0, 0, 0)
+    c.setFillColor(disc_pill_color)
+    c.roundRect(disc_x, disc_y, disc_w, disc_h, disc_h / 2, fill=1, stroke=0)
+
+    # Draw disclaimer text (black, centered)
+    c.setFillColor(white)
+    disc_text_y = disc_y + (disc_h / 2) - (disclaimer_size / 3)
+    c.drawCentredString(width / 2, disc_text_y, disclaimer_text)
 
     # --------------------------
     # Layout
     # --------------------------
-    left, right, top, bottom = 4 * mm, 4 * mm, 37 * mm, 1 * mm
+    left, right, top, bottom = 4 * mm, 4 * mm, 37 * mm, 5 * mm
     grid_w = width - left - right
     cols, rows = 7, 5
     col_w = grid_w / cols
 
     # Weekday header bar (Mon–Sun)
-    weekday_bg = Color(0, 0, 0, alpha=0.85)
+    weekday_bg = Color(0, 0, 0)
     bar_height = 8 * mm
-    bar_y = height - top + 6 * mm
+    bar_y = height - top + 11 * mm
     c.setFillColor(weekday_bg)
     c.rect(left, bar_y, grid_w, bar_height, fill=1, stroke=0)
     c.setFillColor(white)
@@ -365,7 +391,7 @@ def draw_calendar_pdf(title, disclaimer, year, month, cell_texts, background_byt
 
             # --- Prepare text
             lines = cell_texts.get(d, "").split("\n")
-            text_y = y + row_h - 6 * mm
+            text_y = y + row_h - 3.5 * mm
             line_spacing = 4 * mm  # more readable spacing
 
             for line in lines:
@@ -380,7 +406,6 @@ def draw_calendar_pdf(title, disclaimer, year, month, cell_texts, background_byt
                     if not subline:
                         continue
 
-                    # 🔹 Holiday lines — bold, left-aligned, wrapped, and underlined
                     # 🔹 Holiday lines — bold, left-aligned, wrapped, and precisely underlined
                     if subline.isupper():
                         c.setFont("Helvetica-Bold", 8.7)
@@ -413,7 +438,7 @@ def draw_calendar_pdf(title, disclaimer, year, month, cell_texts, background_byt
                         c.setFont("Helvetica-Oblique", 10.5)
                         c.setFillColor(staff_blue)
                         c.drawString(x + 2 * mm, text_y, subline)
-                        text_y -= line_spacing
+                        text_y -= line_spacing - 1
                         continue
 
                     # 🔹 Activities (bold time, normal text)
@@ -500,6 +525,12 @@ fixed_rules_text = st.text_area(
     "Film Night:Thu:18:00\nDogs for Health:Thu:11:00\nReminiscence:Sat:18:00"
 )
 
+daily_rules_text = st.text_area(
+    "Fixed Daily Rules (e.g. Morning Exercise:09:00)",
+    "Morning Exercise:09:00\nNews Headlines:10:00"
+)
+
+
 rules = []
 for line in fixed_rules_text.splitlines():
     parts = [p.strip() for p in line.split(":")]
@@ -509,6 +540,24 @@ for line in fixed_rules_text.splitlines():
         title_txt = parts[0]
         weekday = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].index(day)
         rules.append({"weekday": weekday, "time": time, "title": title_txt})
+
+# 🔹 ADD THIS BELOW weekly rule parsing
+# 🔹 ADD THIS BELOW weekly rule parsing
+daily_rules = []
+for line in daily_rules_text.splitlines():
+    line = line.strip()
+    if not line:
+        continue
+
+    # Split on only the first colon (to keep "09:00" intact)
+    parts = [p.strip() for p in line.split(":", 1)]
+    if len(parts) == 2:
+        title_txt, time = parts
+    else:
+        title_txt, time = parts[0], ""
+
+    if title_txt:
+        daily_rules.append({"time": time, "title": title_txt})
 
 include_holidays = st.checkbox("Include UK National Holidays", True)
 
@@ -521,7 +570,10 @@ session_key = f"{year}-{month:02d}"
 
 if st.button("Preview Calendar"):
     with st.spinner("Generating preview..."):
-        daymap = seat_activity_into_calendar(year, month, activities_df, rota_df, rules, include_holidays)
+        daymap = seat_activity_into_calendar(
+            year, month, activities_df, rota_df, rules, include_holidays,
+            daily_rules
+        )
         st.session_state[session_key] = {}
 
         for d, events in daymap.items():
@@ -531,7 +583,7 @@ if st.button("Preview Calendar"):
                     lines.append(ev["title"].upper())
                 elif ev["notes"] == "staff shift":
                     lines.append(f"Staff: {ev['title']}")
-                elif ev["notes"] in ("fixed", "activity"):
+                elif ev["notes"] in ("fixed", "fixed daily", "activity"):
                     t = ev.get("time", "")
                     lines.append(f"{t} {ev['title']}".strip())
             st.session_state[session_key][d] = "\n".join(lines)
