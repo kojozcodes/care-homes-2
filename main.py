@@ -13,6 +13,7 @@ import textwrap
 import re
 import requests
 import json
+import os
 
 # -------------------------
 # Streamlit page setup
@@ -41,6 +42,25 @@ if not st.session_state.logged_in:
         else:
             st.error("Incorrect password. Try again.")
     st.stop()  # Stops the rest of the app from loading until login
+
+SETTINGS_FILE = "calendar_settings.json"
+
+
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_settings(data):
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        st.error(f"Error saving settings: {e}")
 
 
 # -------------------------
@@ -634,15 +654,36 @@ activities_df = parse_csv(
 bg_file = st.file_uploader("Background Image (optional)",
                            type=["png", "jpg", "jpeg"])
 
+# Load persisted settings
+if "settings" not in st.session_state:
+    st.session_state["settings"] = load_settings()
+
+saved_weekly = st.session_state["settings"].get("weekly_rules",
+    "Film Night:Thu:18:00\nDogs for Health:Thu:11:00\nReminiscence:Sat:18:00"
+)
+saved_daily = st.session_state["settings"].get("daily_rules",
+    "Morning Exercise:09:00\nNews Headlines:10:00"
+)
+
+
 fixed_rules_text = st.text_area(
     "Fixed Weekly Rules (e.g. Film Night:Thu:18:00)",
-    "Film Night:Thu:18:00\nDogs for Health:Thu:11:00\nReminiscence:Sat:18:00"
+    value=saved_weekly,
+    key="weekly_rules_input"
 )
 
 daily_rules_text = st.text_area(
     "Fixed Daily Rules (e.g. Morning Exercise:09:00)",
-    "Morning Exercise:09:00\nNews Headlines:10:00"
+    value=saved_daily,
+    key="daily_rules_input"
 )
+
+if st.button("💾 Save Default Rules"):
+    st.session_state["settings"]["weekly_rules"] = st.session_state["weekly_rules_input"]
+    st.session_state["settings"]["daily_rules"] = st.session_state["daily_rules_input"]
+    save_settings(st.session_state["settings"])
+    st.success("✅ Default rules saved successfully!")
+
 
 rules = []
 for line in fixed_rules_text.splitlines():
