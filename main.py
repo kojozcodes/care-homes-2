@@ -55,6 +55,7 @@ def load_settings():
             return {}
     return {}
 
+
 def save_settings(data):
     try:
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
@@ -92,7 +93,8 @@ def clean_text(s):
         "\u201c": '"', "\u201d": '"',
         "\u2026": "...", "\xa0": " ",
         "\r": " ", "\n": " ", "\u2028": " ", "\u2029": " ", "\ufeff": " ",
-        "\u200b": "", "\u200c": "", "\u200d": "", "\u2060": "",  # zero-width chars
+        "\u200b": "", "\u200c": "", "\u200d": "", "\u2060": "",
+        # zero-width chars
     }
     for bad, good in replacements.items():
         s = s.replace(bad, good)
@@ -102,7 +104,6 @@ def clean_text(s):
     # Collapse multiple spaces
     s = re.sub(r"\s+", " ", s)
     return s.strip()
-
 
 
 @st.cache_data
@@ -125,17 +126,33 @@ ALL_HOLIDAYS = load_all_holidays()
 def fetch_selected_holidays(year, month, selected_names=None):
     """Return holidays for this month/year, filtered by selected_names if provided."""
     holidays_list = []
+
+    # Normalize all selected names for safer comparison
+    selected_normalized = set()
+    if selected_names:
+        for s in selected_names:
+            selected_normalized.add(clean_text(s).lower())
+
     for h in ALL_HOLIDAYS:
         try:
             d = dt.datetime.strptime(h["date"], "%Y-%m-%d").date()
         except:
             continue
+
         if d.year == year and d.month == month:
             name = clean_text(h["name"])
-            if (not selected_names) or (name in selected_names):
-                holidays_list.append({"date": d, "title": name, "notes": "Holiday"})
-    return holidays_list
+            normalized_name = name.lower()
 
+            # Include all if no filters, else match by normalized name
+            if (not selected_names) or (
+                    normalized_name in selected_normalized):
+                holidays_list.append({
+                    "date": d,
+                    "title": name,
+                    "notes": "Holiday"
+                })
+
+    return holidays_list
 
 
 # -------------------------
@@ -152,8 +169,9 @@ def seat_activity_into_calendar(year, month, activities_df, rota_df, rules,
         seen_holidays = set()  # to track (date, normalized_title)
 
         # Combine all sources
-        combined_holidays = fetch_selected_holidays(year, month, st.session_state.get("selected_holidays"))
-
+        combined_holidays = fetch_selected_holidays(year, month,
+                                                    st.session_state.get(
+                                                        "selected_holidays"))
 
         for ev in combined_holidays:
             d = ev["date"]
@@ -425,7 +443,8 @@ def draw_calendar_pdf(title, disclaimer, year, month, cell_texts,
             day_width = c.stringWidth(day_str, "Helvetica-Bold", 12)
 
             # Position a few millimetres from the right edge and near the top
-            c.drawString(x + col_w - day_width - 1.2 * mm, y + row_h - 4.5 * mm,
+            c.drawString(x + col_w - day_width - 1.2 * mm,
+                         y + row_h - 4.5 * mm,
                          day_str)
 
             # --- Prepare text
@@ -659,12 +678,11 @@ if "settings" not in st.session_state:
     st.session_state["settings"] = load_settings()
 
 saved_weekly = st.session_state["settings"].get("weekly_rules",
-    "Film Night:Thu:18:00\nDogs for Health:Thu:11:00\nReminiscence:Sat:18:00"
-)
+                                                "Film Night:Thu:18:00\nDogs for Health:Thu:11:00\nReminiscence:Sat:18:00"
+                                                )
 saved_daily = st.session_state["settings"].get("daily_rules",
-    "Morning Exercise:09:00\nNews Headlines:10:00"
-)
-
+                                               "Morning Exercise:09:00\nNews Headlines:10:00"
+                                               )
 
 fixed_rules_text = st.text_area(
     "Fixed Weekly Rules (e.g. Film Night:Thu:18:00)",
@@ -679,11 +697,12 @@ daily_rules_text = st.text_area(
 )
 
 if st.button("💾 Save Default Rules"):
-    st.session_state["settings"]["weekly_rules"] = st.session_state["weekly_rules_input"]
-    st.session_state["settings"]["daily_rules"] = st.session_state["daily_rules_input"]
+    st.session_state["settings"]["weekly_rules"] = st.session_state[
+        "weekly_rules_input"]
+    st.session_state["settings"]["daily_rules"] = st.session_state[
+        "daily_rules_input"]
     save_settings(st.session_state["settings"])
     st.success("✅ Default rules saved successfully!")
-
 
 rules = []
 for line in fixed_rules_text.splitlines():
@@ -716,12 +735,11 @@ for line in daily_rules_text.splitlines():
 include_holidays = st.checkbox("Include UK National Holidays", True)
 
 # -------------------------
-# Holiday selection system (simple border around each day group)
+# Holiday selection system (persistent selections)
 # -------------------------
 if include_holidays:
     st.markdown("### 🗓️ Select Holidays to Include")
 
-    # Group holidays by date
     holidays_by_day = {}
     for h in ALL_HOLIDAYS:
         try:
@@ -734,7 +752,16 @@ if include_holidays:
     if not holidays_by_day:
         st.info("No holidays found for this month.")
     else:
-        selected_holidays = []
+        # Load saved selection if available
+        # Load saved selection if available
+        saved_selection = set(st.session_state.get("selected_holidays", []))
+        current_selection = set()
+
+        # If no saved holidays yet, default to all holidays for this month
+        if not saved_selection:
+            all_holiday_names = {hname for hlist in holidays_by_day.values()
+                                 for hname in hlist}
+            saved_selection = all_holiday_names
 
         # Simple CSS border style
         st.markdown("""
@@ -752,7 +779,6 @@ if include_holidays:
         </style>
         """, unsafe_allow_html=True)
 
-        # Display in table-like layout by week
         month_days = calendar.monthcalendar(year, month)
         for week in month_days:
             cols = st.columns(7)
@@ -768,16 +794,18 @@ if include_holidays:
                         unsafe_allow_html=True
                     )
                     if not day_holidays:
-                        st.markdown("<em>No holidays</em>", unsafe_allow_html=True)
+                        st.markdown("<em>No holidays</em>",
+                                    unsafe_allow_html=True)
                     else:
                         for name in sorted(set(day_holidays)):
                             key = f"hol_{year}-{month:02d}-{day:02d}_{name}"
-                            if st.checkbox(name, value=True, key=key):
-                                selected_holidays.append(name)
+                            checked = name in saved_selection
+                            if st.checkbox(name, value=checked, key=key):
+                                current_selection.add(name)
                     st.markdown("</div>", unsafe_allow_html=True)
 
-        st.session_state["selected_holidays"] = selected_holidays
-
+        # Update session state once after rendering
+        st.session_state["selected_holidays"] = list(current_selection)
 
 # -------------------------
 # Preview and Editable Calendar Section
@@ -785,6 +813,14 @@ if include_holidays:
 
 # Create a unique session key for each (year, month) combo
 session_key = f"{year}-{month:02d}"
+# Reset selection when changing month or year
+if "last_month" not in st.session_state or \
+   st.session_state["last_month"] != month or \
+   st.session_state["last_year"] != year:
+    st.session_state["selected_holidays"] = []
+    st.session_state["last_month"] = month
+    st.session_state["last_year"] = year
+
 
 if st.button("Preview Calendar"):
     with st.spinner("Generating preview..."):
@@ -856,3 +892,4 @@ if session_key in st.session_state:
             file_name=f"calendar_{year}_{month:02d}_A3.pdf",
             mime="application/pdf",
         )
+
