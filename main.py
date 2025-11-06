@@ -31,15 +31,15 @@ import datetime as dt
 import calendar
 from io import BytesIO
 from reportlab.lib.pagesizes import A3, landscape
-from reportlab.pdfgen import canvas
-from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
-from reportlab.lib.colors import Color, black, white
-import textwrap
 import re
-import requests
 import json
 import os
+import PyPDF2
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.lib.colors import Color, black, white
+from reportlab.lib.units import mm
 
 # -------------------------
 # Streamlit page setup
@@ -1107,3 +1107,188 @@ if session_key in st.session_state:
             file_name=f"calendar_{year}_{month:02d}_A3.pdf",
             mime="application/pdf",
         )
+
+    if st.button("📅 Generate Weekly PDFs (A4 Landscape)"):
+
+        with st.spinner("Generating weekly PDFs..."):
+            from reportlab.lib.pagesizes import A4, landscape
+            from reportlab.pdfgen import canvas
+            from reportlab.lib.colors import black
+            from reportlab.lib.units import mm
+            import PyPDF2
+
+
+            # Helper to add ordinal suffix (1st, 2nd, 3rd, 4th...)
+            def ordinal(n):
+                if 10 <= n % 100 <= 20:
+                    suffix = "th"
+                else:
+                    suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+                return f"{n}{suffix}"
+
+
+            # Prepare list of days for the month
+            first_day, last_day = month_date_range(year, month)
+            days = [first_day + dt.timedelta(days=i)
+                    for i in range((last_day - first_day).days + 1)]
+
+            # Split into chunks of 7 (weeks)
+            weeks = [days[i:i + 7] for i in range(0, len(days), 7)]
+
+            pdf_buffers = []  # collect each week’s PDF bytes
+
+            for week_days in weeks:
+                buf = BytesIO()
+                c = canvas.Canvas(buf, pagesize=landscape(A4))
+                width, height = landscape(A4)
+
+                # For each day in the week, create a page
+                for d in week_days:
+                    # 🔹 Draw large centered day heading (date)
+                    c.setFont("Helvetica-Bold", 26)
+                    c.setFillColor(black)
+                    day_str = f"{calendar.day_name[d.weekday()]} {ordinal(d.day)} {calendar.month_name[d.month]}"
+                    day_width = c.stringWidth(day_str, "Helvetica-Bold", 26)
+                    day_x = (width - day_width) / 2
+                    day_y = height - 14 * mm
+                    c.drawString(day_x, day_y, day_str)
+
+                    # 🔹 Draw standard disclaimer under the date — centered & wrapped
+                    c.setFont("Helvetica-Oblique", 12)
+                    disclaimer_text = (
+                        "Activities may change due to unforeseen circumstances. "
+                        "Families are welcome to join. "
+                        "Weather permitting, activities may move outdoors."
+                    )
+
+                    # Wrap disclaimer text to fit within centered margins
+                    max_text_width = width - 80 * mm  # generous side margins (40 mm each)
+                    words = disclaimer_text.split()
+                    current_line = ""
+                    wrapped_lines = []
+                    for word in words:
+                        test_line = (current_line + " " + word).strip()
+                        if c.stringWidth(test_line, "Helvetica-Oblique",
+                                         12) > max_text_width and current_line:
+                            wrapped_lines.append(current_line)
+                            current_line = word
+                        else:
+                            current_line = test_line
+                    if current_line:
+                        wrapped_lines.append(current_line)
+
+                    # Draw each line centered below the date with extra vertical spacing
+                    line_spacing = 6 * mm
+                    text_y = day_y - 10 * mm  # significant margin between date and disclaimer
+                    for line in wrapped_lines:
+                        line_width = c.stringWidth(line, "Helvetica-BoldOblique",
+                                                   12)
+                        c.drawString((width - line_width) / 2, text_y, line)
+                        text_y -= line_spacing
+
+                    # 🔹 Draw events for the day — bold and spaced further below disclaimer
+                    margin_below_disclaimer = 5 * mm  # increased space for clarity
+                    y = text_y - margin_below_disclaimer
+
+                    # Retrieve day’s content from session_state
+                    text = st.session_state.get(f"{session_key}_{d}",
+                                                "").strip()
+                    if not text:
+                        text = "(No activities planned)"
+
+                    # Combine staff lines into a single formatted line
+                    staff_lines = []
+                    other_lines = []
+                    for line in text.split("\n"):
+                        line = clean_text(line)
+                        if not line:
+                            continue
+                        if line.lower().startswith("staff:"):
+                            staff_lines.append(line.strip())
+                        else:
+                            other_lines.append(line.strip())
+
+                    # Draw staff line first (if any)
+                    if staff_lines:
+                        combined_staff = " - ".join(staff_lines)
+                        x_start = 25 * mm
+                        max_width = width - (2 * x_start)
+
+                        # Wrap combined staff line if it's too long for one line
+                        words = combined_staff.split()
+                        current_line = ""
+                        wrapped_lines = []
+                        for word in words:
+                            test_line = (current_line + " " + word).strip()
+                            if c.stringWidth(test_line, "Helvetica-Oblique",
+                                             15) > max_width and current_line:
+                                wrapped_lines.append(current_line)
+                                current_line = word
+                            else:
+                                current_line = test_line
+                        if current_line:
+                            wrapped_lines.append(current_line)
+
+                        # Staff color (same as monthly)
+                        staff_blue = Color(0, 0.298, 0.6)
+                        c.setFont("Helvetica-Oblique", 15)
+                        c.setFillColor(staff_blue)
+
+                        for wrapped in wrapped_lines:
+                            wrapped = wrapped.strip()
+                            c.drawString(x_start, y, wrapped)
+                            y -= 9 * mm  # spacing between wrapped lines
+
+                        y -= 5 * mm  # extra gap after staff section
+
+                    # Draw remaining non-staff events normally
+                    for line in other_lines:
+                        c.setFont("Helvetica-Bold", 15)
+                        c.setFillColor(black)
+                        x_start = 25 * mm
+                        max_width = width - (2 * x_start)
+                        words = line.split()
+                        current_line = ""
+                        wrapped_lines = []
+                        for word in words:
+                            test_line = (current_line + " " + word).strip()
+                            if c.stringWidth(test_line, "Helvetica-Bold",
+                                             15) > max_width and current_line:
+                                wrapped_lines.append(current_line)
+                                current_line = word
+                            else:
+                                current_line = test_line
+                        if current_line:
+                            wrapped_lines.append(current_line)
+                        for wrapped in wrapped_lines:
+                            c.drawString(x_start, y, wrapped.strip())
+                            y -= 9 * mm
+                        y -= 5 * mm
+
+                        # Start new page if running out of space
+                        if y < 25 * mm:
+                            c.showPage()
+                            y = height - 40 * mm
+
+                    c.showPage()  # move to next day
+
+                c.save()
+                buf.seek(0)
+                pdf_buffers.append(buf.getvalue())
+
+            # 🔹 Combine all weeks into one PDF
+            merger = PyPDF2.PdfMerger()
+            for pdf in pdf_buffers:
+                merger.append(BytesIO(pdf))
+            merged_output = BytesIO()
+            merger.write(merged_output)
+            merger.close()
+            merged_output.seek(0)
+
+            st.success("✅ Weekly A4 PDFs generated successfully!")
+            st.download_button(
+                "📥 Download Weekly Calendar (A4 Landscape)",
+                data=merged_output,
+                file_name=f"weekly_calendar_{year}_{month:02d}.pdf",
+                mime="application/pdf",
+            )
