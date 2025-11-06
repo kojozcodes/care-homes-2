@@ -1145,16 +1145,22 @@ if session_key in st.session_state:
                 # For each day in the week, create a page
                 for d in week_days:
                     # 🔹 Draw large centered day heading (date)
-                    c.setFont("Helvetica-Bold", 26)
+                    c.setFont("Helvetica-Bold", 40)
                     c.setFillColor(black)
+
+                    # Format like "Monday 3rd November"
                     day_str = f"{calendar.day_name[d.weekday()]} {ordinal(d.day)} {calendar.month_name[d.month]}"
-                    day_width = c.stringWidth(day_str, "Helvetica-Bold", 26)
+
+                    # Center horizontally using string width (use same font size for accurate centering)
+                    day_width = c.stringWidth(day_str, "Helvetica-Bold", 40)
                     day_x = (width - day_width) / 2
-                    day_y = height - 14 * mm
+                    day_y = height - 20 * mm  # move it up slightly for better positioning
+
+                    # Draw the string centered
                     c.drawString(day_x, day_y, day_str)
 
                     # 🔹 Draw standard disclaimer under the date — centered & wrapped
-                    c.setFont("Helvetica-Oblique", 12)
+                    c.setFont("Helvetica-Oblique", 14)
                     disclaimer_text = (
                         "Activities may change due to unforeseen circumstances. "
                         "Families are welcome to join. "
@@ -1245,6 +1251,7 @@ if session_key in st.session_state:
                     # 🔹 Merge activities with identical times (e.g., "14:30 Gardening Club" + "14:30 Target Throw")
                     merged_activities = {}
                     for line in other_lines:
+                        # Detect time pattern
                         match = re.match(r"^(\d{1,2}:\d{2})\s*(.*)", line)
                         if match:
                             time, desc = match.groups()
@@ -1254,26 +1261,46 @@ if session_key in st.session_state:
                             merged_activities.setdefault(None, []).append(
                                 line.strip())
 
-                    # 🔹 Draw merged activity lines
+                    # 🔹 Draw merged lines — differentiate holidays vs activities
                     for time, desc_list in merged_activities.items():
-                        if time:
-                            combined_text = f"{time}: " + " → ".join(desc_list)
+                        # 🎨 Decide styling based on case (holiday vs activity)
+                        if all(d.isupper() for d in desc_list):
+                            combined_text = (
+                                " / ".join(desc_list)
+                                if time is None else f"{time}: " + " / ".join(
+                                    desc_list)
+                            )
+                            font_size = 15
+                            c.setFont("Helvetica-Bold", font_size)
+                            c.setFillColor(Color(0, 0, 0))
                         else:
-                            combined_text = " → ".join(desc_list)
+                            combined_text = (
+                                " → ".join(desc_list)
+                                if time is None else f"{time}: " + " → ".join(
+                                    desc_list)
+                            )
+                            font_size = 26
+                            c.setFont("Helvetica-Bold", font_size)
+                            c.setFillColor(
+                                Color(0.1, 0.1, 0.1))  # softer black
 
-                        c.setFont("Helvetica-Bold", 15)
-                        c.setFillColor(black)
+                        # 🧾 Wrapping margins
                         x_start = 25 * mm
-                        max_width = width - (2 * x_start)
+                        x_end = width - 25 * mm
+                        max_width = x_end - x_start
 
-                        # Wrap combined line if needed
+                        # 🌀 Wrap text to fit between margins
                         words = combined_text.split()
                         current_line = ""
                         wrapped_lines = []
                         for word in words:
                             test_line = (current_line + " " + word).strip()
-                            if c.stringWidth(test_line, "Helvetica-Bold",
-                                             15) > max_width and current_line:
+                            if (
+                                    c.stringWidth(test_line, "Helvetica-Bold",
+                                                  font_size)
+                                    > max_width
+                                    and current_line
+                            ):
                                 wrapped_lines.append(current_line)
                                 current_line = word
                             else:
@@ -1281,12 +1308,15 @@ if session_key in st.session_state:
                         if current_line:
                             wrapped_lines.append(current_line)
 
+                        # ✏️ Draw each wrapped line
                         for wrapped in wrapped_lines:
                             c.drawString(x_start, y, wrapped.strip())
-                            y -= 9 * mm
-                        y -= 5 * mm
+                            y -= 8 * mm if not all(
+                                d.isupper() for d in desc_list) else 7 * mm
 
-                        # Start new page if running out of space
+                        y -= 6 * mm  # extra gap between blocks
+
+                        # Prevent overlap near bottom of page
                         if y < 25 * mm:
                             c.showPage()
                             y = height - 40 * mm
