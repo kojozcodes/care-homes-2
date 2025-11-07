@@ -1217,8 +1217,8 @@ if session_key in st.session_state:
                     # Draw staff line first (if any)
                     if staff_lines:
                         combined_staff = " - ".join(staff_lines)
-                        x_start = 25 * mm
-                        max_width = width - (2 * x_start)
+                        x_start = 10 * mm
+                        max_width = width - 35 * mm  # keep some room for pictures on the right
 
                         # Wrap combined staff line if it's too long for one line
                         words = combined_staff.split()
@@ -1285,8 +1285,8 @@ if session_key in st.session_state:
                                 Color(0.1, 0.1, 0.1))  # softer black
 
                         # 🧾 Wrapping margins
-                        x_start = 25 * mm
-                        x_end = width - 25 * mm
+                        x_start = 10 * mm
+                        x_end = width - 80 * mm  # narrower right margin for image space
                         max_width = x_end - x_start
 
                         # 🌀 Wrap text to fit between margins
