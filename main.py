@@ -1,7 +1,7 @@
 """
 main.py
 
-Care Home Monthly Calendar — Streamlit app (refactored)
+Care Home Monthly Calendar – Streamlit app (refactored with Pexels integration)
 
 Features:
 - Secure single-user login (uses Streamlit secrets["APP_PASSWORD"])
@@ -11,10 +11,8 @@ Features:
 - A3 monthly PDF export (styled)
 - Weekly splitting (4-5 weeks) + UI to choose a week
 - Generate A4 weekly PDF for a selected week, or all weeks
-
-Notes:
-- Keep indentation exactly as-is.
-- This file intentionally keeps logic readable for step-by-step changes.
+- Pexels API integration for activity-based images on weekly PDFs (3 images per day)
+- Interactive image editor to move and resize images before PDF generation
 """
 
 import streamlit as st
@@ -32,11 +30,58 @@ import PyPDF2
 from reportlab.pdfgen import canvas
 from reportlab.lib.colors import Color, black, white
 from reportlab.lib.units import mm
+import requests
+from PIL import Image, ImageDraw, ImageFont
 
 # -------------------------
 # Page configuration
 # -------------------------
 st.set_page_config(page_title="Care Home Monthly Calendar", layout="wide")
+
+# -------------------------
+# Pexels API Configuration
+# -------------------------
+PEXELS_API_KEY = st.secrets.get("PEXELS_API_KEY", "")
+PEXELS_SEARCH_URL = "https://api.pexels.com/v1/search"
+
+# Cache directory for images
+IMAGE_CACHE_DIR = "image_cache"
+os.makedirs(IMAGE_CACHE_DIR, exist_ok=True)
+
+# -------------------------
+# Activity Keyword Mapping
+# -------------------------
+ACTIVITY_KEYWORDS = {
+    "gardening": "gardening flowers nature",
+    "dogs for health": "dogs therapy animals",
+    "film night": "cinema movie film reel",
+    "book club": "reading books library",
+    "bookworms": "reading books cozy",
+    "quiz": "trivia questions game",
+    "pub quiz": "pub quiz game",
+    "christmas crafts": "christmas decorations crafts",
+    "remembrance": "poppy remembrance memorial",
+    "poppy": "poppy flowers red",
+    "baking": "baking cookies kitchen",
+    "painting": "painting art creative",
+    "music": "music instruments singing",
+    "exercise": "seniors exercise fitness",
+    "yoga": "seniors yoga stretching",
+    "reminiscence": "memory nostalgia vintage",
+    "bingo": "bingo game numbers",
+    "balloon volleyball": "balloon games seniors",
+    "target throw": "target game activity",
+    "one-on-one": "conversation chat seniors",
+    "coffee morning": "coffee tea social",
+    "singing": "singing group music",
+    "knitting": "knitting craft wool",
+    "dominoes": "dominoes game seniors",
+    "cards": "playing cards game",
+    "scrabble": "scrabble word game",
+    "jigsaw": "jigsaw puzzle",
+    "walking": "walking nature outdoors",
+    "afternoon tea": "tea sandwiches afternoon",
+}
 
 # -------------------------
 # Helper functions
@@ -476,34 +521,435 @@ def draw_calendar_pdf(title, disclaimer, year, month, cell_texts, background_byt
                     if text_y < y + 4 * mm:
                         break
 
-                    if subline.lower().startswith("staff:"):
-                        c.setFont("Helvetica-Oblique", 10.5)
-                        c.setFillColor(staff_blue)
-                        c.drawString(x + 2 * mm, text_y, subline)
-                        text_y -= line_spacing - 1
-                        continue
-
-                    time_match = re.match(r"^(\d{1,2}:\d{2}\s?(?:am|pm|AM|PM)?)\s?(.*)", subline)
-                    if time_match:
-                        time_part, rest = time_match.groups()
-                        c.setFont("Helvetica-Bold", 10.5)
-                        c.setFillColor(black)
-                        c.drawString(x + 2 * mm, text_y, time_part)
-                        time_width = c.stringWidth(time_part + " ", "Helvetica-Bold", 9.5)
-                        c.setFont("Helvetica-Bold", 10.5)
-                        c.drawString(x + 2 * mm + time_width, text_y, rest)
-                    else:
-                        c.setFont("Helvetica-Bold", 10.5)
-                        c.setFillColor(black)
-                        c.drawString(x + 2 * mm, text_y, subline)
-
-                    text_y -= line_spacing
-                    if text_y < y + 4 * mm:
-                        break
-
     c.save()
     buffer.seek(0)
     return buffer
+
+
+# -------------------------
+# Pexels Integration Functions
+# -------------------------
+
+def get_activity_keyword(activity_name):
+    """
+    Extract search keyword for an activity.
+    Returns the mapped keyword or a cleaned version of the activity name.
+    """
+    activity_lower = activity_name.lower().strip()
+
+    # Check for direct matches
+    if activity_lower in ACTIVITY_KEYWORDS:
+        return ACTIVITY_KEYWORDS[activity_lower]
+
+    # Check for partial matches
+    for key, value in ACTIVITY_KEYWORDS.items():
+        if key in activity_lower:
+            return value
+
+    # Default: clean the activity name
+    cleaned = activity_lower.replace("club", "").strip()
+    return cleaned if cleaned else "seniors activity"
+
+
+@st.cache_data(ttl=86400)  # Cache for 24 hours
+def fetch_pexels_image(keyword, orientation="landscape", size="medium"):
+    """
+    Fetch an image from Pexels API based on keyword.
+    Returns image bytes or None if fetch fails.
+    """
+    if not PEXELS_API_KEY:
+        return None
+
+    # Create cache filename
+    cache_key = hashlib.md5(f"{keyword}_{orientation}_{size}".encode()).hexdigest()
+    cache_path = os.path.join(IMAGE_CACHE_DIR, f"{cache_key}.jpg")
+
+    # Check cache first
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "rb") as f:
+                return f.read()
+        except Exception:
+            pass
+
+    # Fetch from Pexels
+    headers = {"Authorization": PEXELS_API_KEY}
+    params = {
+        "query": keyword,
+        "orientation": orientation,
+        "per_page": 1,
+        "page": 1
+    }
+
+    try:
+        response = requests.get(PEXELS_SEARCH_URL, headers=headers, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        if data.get("photos") and len(data["photos"]) > 0:
+            photo = data["photos"][0]
+
+            # Choose appropriate size
+            if size == "large":
+                image_url = photo["src"].get("large2x", photo["src"]["large"])
+            elif size == "small":
+                image_url = photo["src"].get("small", photo["src"]["medium"])
+            else:
+                image_url = photo["src"]["medium"]
+
+            # Download image
+            img_response = requests.get(image_url, timeout=10)
+            img_response.raise_for_status()
+            img_bytes = img_response.content
+
+            # Cache the image
+            try:
+                with open(cache_path, "wb") as f:
+                    f.write(img_bytes)
+            except Exception:
+                pass
+
+            return img_bytes
+
+    except Exception:
+        pass
+
+    return None
+
+
+def extract_activities_from_text(text):
+    """
+    Extract individual activities from formatted text.
+    Returns list of activity names (without times).
+    """
+    activities = []
+
+    for line in text.split("\n"):
+        line = clean_text(line).strip()
+        if not line:
+            continue
+
+        # Skip holidays (uppercase)
+        if line.isupper():
+            continue
+
+        # Skip staff lines
+        if line.lower().startswith("staff:"):
+            continue
+
+        # Remove time prefix (e.g., "14:30: ")
+        line = re.sub(r"^\d{1,2}:\d{2}:?\s*", "", line)
+
+        # Split by arrow separator
+        parts = re.split(r"\s*→\s*", line)
+
+        for part in parts:
+            part = part.strip()
+            if part and not part.lower().startswith("staff"):
+                activities.append(part)
+
+    return activities
+
+
+def get_images_for_day_activities(day_text, max_images=3):
+    """
+    Get up to 3 images for a day's activities.
+    Returns list of image bytes (can be empty or have 1-3 images).
+    """
+    activities = extract_activities_from_text(day_text)
+
+    if not activities:
+        return []
+
+    # Get unique activities (up to max_images)
+    unique_activities = []
+    seen = set()
+    for activity in activities:
+        activity_lower = activity.lower().strip()
+        if activity_lower not in seen:
+            unique_activities.append(activity)
+            seen.add(activity_lower)
+            if len(unique_activities) >= max_images:
+                break
+
+    # Fetch images for each activity
+    images = []
+    for activity in unique_activities:
+        keyword = get_activity_keyword(activity)
+        image_bytes = fetch_pexels_image(keyword, orientation="landscape", size="medium")
+        if image_bytes:
+            images.append(image_bytes)
+
+    return images
+
+
+def get_default_image_layout(num_images, page_width, page_height):
+    """
+    Get default positions and sizes for images.
+    Returns list of dicts with keys: x, y, width, height (in points)
+    """
+    layouts = []
+
+    # Convert mm to points (1mm = 2.83465 points)
+    text_area_right = page_width * 0.62
+    image_area_left = page_width * 0.64
+    image_area_width = page_width * 0.32
+
+    img_width = image_area_width - 10 * mm
+    available_height = page_height - 50 * mm - 20 * mm
+
+    spacing = 8 * mm
+    total_spacing = spacing * (num_images - 1) if num_images > 1 else 0
+    img_height = (available_height - total_spacing) / num_images
+
+    max_img_height = img_width * 0.75
+    if img_height > max_img_height:
+        img_height = max_img_height
+
+    img_x = image_area_left + 5 * mm
+    img_y_start = page_height - 50 * mm
+
+    for idx in range(num_images):
+        img_y = img_y_start - (idx * (img_height + spacing))
+        layouts.append({
+            "x": img_x,
+            "y": img_y - img_height,  # Bottom-left corner
+            "width": img_width,
+            "height": img_height
+        })
+
+    return layouts
+
+
+def draw_weekly_page_with_custom_layout(c, width, height, day_obj, text, image_bytes_list=None, image_layouts=None):
+    """
+    Draw a single day page on A4 landscape with custom positioned images.
+    image_bytes_list: list of up to 3 image bytes
+    image_layouts: list of dicts with x, y, width, height for each image
+    """
+    # Define layout areas
+    text_area_right = width * 0.62  # Text takes left 62%
+
+    # Draw day heading
+    c.setFont("Helvetica-Bold", 40)
+    day_str = f"{calendar.day_name[day_obj.weekday()]} {day_obj.day} {calendar.month_name[day_obj.month]}"
+    day_width = c.stringWidth(day_str, "Helvetica-Bold", 40)
+    c.drawString((text_area_right - day_width) / 2, height - 20 * mm, day_str)
+
+    # Draw disclaimer
+    c.setFont("Helvetica-Oblique", 14)
+    disclaimer_text = (
+        "Activities may change due to unforeseen circumstances. "
+        "Families are welcome to join. "
+        "Weather permitting, activities may move outdoors."
+    )
+
+    max_text_width = text_area_right - 20 * mm
+    words = disclaimer_text.split()
+    current_line = ""
+    wrapped_lines = []
+    for word in words:
+        test_line = (current_line + " " + word).strip()
+        if c.stringWidth(test_line, "Helvetica-Oblique", 12) > max_text_width and current_line:
+            wrapped_lines.append(current_line)
+            current_line = word
+        else:
+            current_line = test_line
+    if current_line:
+        wrapped_lines.append(current_line)
+
+    line_spacing = 6 * mm
+    text_y = height - 30 * mm
+    for line in wrapped_lines:
+        line_width = c.stringWidth(line, "Helvetica-Oblique", 12)
+        c.drawString((text_area_right - line_width) / 2, text_y, line)
+        text_y -= line_spacing
+
+    y = text_y - 8 * mm
+
+    # Draw images with custom layout
+    if image_bytes_list and image_layouts:
+        try:
+            for idx, (image_bytes, layout) in enumerate(zip(image_bytes_list, image_layouts)):
+                img = ImageReader(BytesIO(image_bytes))
+
+                # Draw rounded rectangle background
+                c.setFillColor(Color(0.95, 0.95, 0.95))
+                c.roundRect(layout["x"] - 3 * mm, layout["y"] - 3 * mm,
+                           layout["width"] + 6 * mm, layout["height"] + 6 * mm,
+                           8, fill=1, stroke=0)
+
+                # Draw image
+                c.drawImage(img, layout["x"], layout["y"],
+                           width=layout["width"], height=layout["height"],
+                           preserveAspectRatio=True, mask="auto")
+
+        except Exception as e:
+            # Silently fail - images are optional
+            pass
+
+    # Draw activities text (left side only)
+    staff_lines = []
+    other_lines = []
+    for line in text.split("\n"):
+        line = clean_text(line)
+        if not line:
+            continue
+        if line.lower().startswith("staff:"):
+            staff_lines.append(line.strip())
+        else:
+            other_lines.append(line.strip())
+
+    staff_blue = Color(0, 0.298, 0.6)
+    if staff_lines:
+        combined_staff = " - ".join(staff_lines)
+        words = combined_staff.split()
+        current_line = ""
+        wrapped_staff = []
+        max_width = text_area_right - 20 * mm
+        for word in words:
+            test_line = (current_line + " " + word).strip()
+            if c.stringWidth(test_line, "Helvetica-Oblique", 15) > max_width and current_line:
+                wrapped_staff.append(current_line)
+                current_line = word
+            else:
+                current_line = test_line
+        if current_line:
+            wrapped_staff.append(current_line)
+
+        c.setFont("Helvetica-Oblique", 15)
+        c.setFillColor(staff_blue)
+        for wrapped in wrapped_staff:
+            c.drawString(10 * mm, y, wrapped)
+            y -= 9 * mm
+        y -= 5 * mm
+
+    # Draw activities
+    merged_activities = {}
+    for line in other_lines:
+        match = re.match(r"^(\d{1,2}:\d{2})\s*(.*)", line)
+        if match:
+            time, desc = match.groups()
+            merged_activities.setdefault(time, []).append(desc.strip())
+        else:
+            merged_activities.setdefault(None, []).append(line.strip())
+
+    for time, desc_list in merged_activities.items():
+        if all(d.isupper() for d in desc_list):
+            combined_text = (" / ".join(desc_list) if time is None else f"{time}: " + " / ".join(desc_list))
+            font_size = 15
+            c.setFont("Helvetica-Bold", font_size)
+            c.setFillColor(black)
+        else:
+            combined_text = (" → ".join(desc_list) if time is None else f"{time}: " + " → ".join(desc_list))
+            font_size = 22
+            c.setFont("Helvetica-Bold", font_size)
+            c.setFillColor(Color(0.1, 0.1, 0.1))
+
+        x_start = 10 * mm
+        max_width_text = text_area_right - 20 * mm
+
+        words = combined_text.split()
+        current_line = ""
+        wrapped_lines = []
+        for word in words:
+            test_line = (current_line + " " + word).strip()
+            if c.stringWidth(test_line, "Helvetica-Bold", font_size) > max_width_text and current_line:
+                wrapped_lines.append(current_line)
+                current_line = word
+            else:
+                current_line = test_line
+        if current_line:
+            wrapped_lines.append(current_line)
+
+        for wrapped in wrapped_lines:
+            c.drawString(x_start, y, wrapped.strip())
+            y -= 8 * mm if not all(d.isupper() for d in desc_list) else 7 * mm
+
+        y -= 6 * mm
+        if y < 25 * mm:
+            break
+
+
+def create_preview_image_with_layout(width, height, day_obj, text, image_bytes_list=None, image_layouts=None):
+    """
+    Create a preview image using PIL to show the layout with custom positioned images.
+    Returns PIL Image object.
+    """
+    # Create white background
+    img = Image.new('RGB', (int(width), int(height)), color='white')
+    draw = ImageDraw.Draw(img)
+
+    # Define layout areas
+    text_area_right = int(width * 0.62)
+
+    # Try to use a font, fallback to default
+    try:
+        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
+        body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+        activity_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
+    except:
+        title_font = ImageFont.load_default()
+        body_font = ImageFont.load_default()
+        activity_font = ImageFont.load_default()
+
+    # Draw day heading
+    day_str = f"{calendar.day_name[day_obj.weekday()]} {day_obj.day} {calendar.month_name[day_obj.month]}"
+    draw.text((text_area_right // 2, 50), day_str, fill='black', font=title_font, anchor="mt")
+
+    # Draw disclaimer
+    disclaimer_text = "Activities may change. Families welcome. Weather permitting, activities may move outdoors."
+    draw.text((text_area_right // 2, 110), disclaimer_text, fill='gray', font=body_font, anchor="mt")
+
+    # Draw images with custom layout
+    if image_bytes_list and image_layouts:
+        for idx, (image_bytes, layout) in enumerate(zip(image_bytes_list, image_layouts)):
+            try:
+                pil_img = Image.open(BytesIO(image_bytes))
+
+                # Resize to fit layout
+                pil_img = pil_img.resize((int(layout["width"]), int(layout["height"])), Image.Resampling.LANCZOS)
+
+                # Draw gray background
+                bg_x = int(layout["x"] - 3 * mm)
+                bg_y = int(height - layout["y"] - layout["height"] - 3 * mm)  # Flip Y
+                bg_w = int(layout["width"] + 6 * mm)
+                bg_h = int(layout["height"] + 6 * mm)
+                draw.rounded_rectangle([bg_x, bg_y, bg_x + bg_w, bg_y + bg_h],
+                                      radius=8, fill='lightgray')
+
+                # Paste image
+                img_x = int(layout["x"])
+                img_y = int(height - layout["y"] - layout["height"])  # Flip Y for PIL
+                img.paste(pil_img, (img_x, img_y))
+
+                # Draw border for visibility
+                draw.rectangle([img_x, img_y, img_x + int(layout["width"]),
+                              img_y + int(layout["height"])],
+                             outline='red', width=2)
+
+            except Exception as e:
+                pass
+
+    # Draw activity text
+    y_pos = 180
+    for line in text.split("\n")[:10]:  # Limit to 10 lines for preview
+        line = clean_text(line).strip()
+        if not line:
+            continue
+        draw.text((20, y_pos), line, fill='black', font=body_font)
+        y_pos += 25
+
+    return img
+
+
+def ordinal(n):
+    """Return ordinal suffix for a number (1st, 2nd, 3rd, etc.)"""
+    if 10 <= n % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
 
 
 # -----------------------------------------------
@@ -512,8 +958,7 @@ def draw_calendar_pdf(title, disclaimer, year, month, cell_texts, background_byt
 def get_weeks_in_month(year, month):
     """
     Returns a list of tuples [(start_date, end_date), ...] for each week row
-    in the calendar.monthcalendar output. Weeks will reflect partial weeks at
-    the start/end of the month (i.e. start or end may be within the month).
+    in the calendar.monthcalendar output.
     """
     cal = calendar.monthcalendar(year, month)
     weeks = []
@@ -560,7 +1005,7 @@ if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
-    st.title("🔐 Secure Access")
+    st.title("🔒 Secure Access")
     password = st.text_input("Enter password", type="password")
     if st.button("Login"):
         if hashlib.sha256(password.encode()).hexdigest() == PASSWORD_HASH:
@@ -574,7 +1019,7 @@ if not st.session_state.logged_in:
 # -------------------------
 # Streamlit UI - Main
 # -------------------------
-st.title("🏡 Care Home Monthly Activities — Editable Preview & A3 PDF")
+st.title("🏡 Care Home Monthly Activities – Editable Preview & A3 PDF")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -591,7 +1036,7 @@ with st.expander("🧑‍💼 Staff Rota CSV Format (Example)"):
     st.write("""
     **Required Headers:**
     - `date` → Date in format `YYYY-MM-DD`
-    - `staff` → Staff member’s full name  
+    - `staff` → Staff member's full name  
     - `shift_start` → Start time (e.g. `09:00`)
     - `shift_end` → End time (e.g. `16:30`)
     - `role` → (Optional) Staff role or position
@@ -736,8 +1181,6 @@ session_key = f"{year}-{month:02d}"
 
 # Reset preview when changing month/year
 if "last_preview_year" not in st.session_state or st.session_state.get("last_preview_year") != year or st.session_state.get("last_preview_month") != month:
-    # Remove any stored preview for previous month
-    # (we keep the data but clear the UI-specific keys)
     st.session_state["last_preview_year"] = year
     st.session_state["last_preview_month"] = month
 
@@ -810,27 +1253,15 @@ if session_key in st.session_state:
                                          format_func=lambda i: week_labels[i])
         selected_week_range = weeks[selected_week_idx]
 
-        # Helper: ordinal suffix
-        def ordinal(n):
-            if 10 <= n % 100 <= 20:
-                suffix = "th"
-            else:
-                suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-            return f"{n}{suffix}"
-
-
         # -------------------------
-        # Weekly Preview (PDF-like Visual)
+        # Weekly Preview with Image Editor
         # -------------------------
         st.markdown("---")
-        st.write("## 🖼️ Weekly PDF Preview (Single Day View)")
+        st.write("## 🎨 Interactive Image Editor & Preview")
 
-        from reportlab.pdfgen import canvas
-        from reportlab.lib.pagesizes import A4, landscape
-        from reportlab.lib.colors import black, Color
-        from reportlab.lib.units import mm
-        from PIL import Image
-        import fitz  # PyMuPDF
+        # Initialize image layouts in session state
+        if "image_layouts" not in st.session_state:
+            st.session_state.image_layouts = {}
 
         # Initialize preview indices
         if "preview_week_idx" not in st.session_state:
@@ -847,170 +1278,112 @@ if session_key in st.session_state:
             total_days = len(week_days)
 
             # Navigation buttons
-            col_prev, col_next = st.columns([1, 1])
+            col_prev, col_next, col_reset = st.columns([1, 1, 1])
             with col_prev:
                 if st.button("⬅️ Previous Day"):
-                    st.session_state.preview_day_idx = max(0,
-                                                           st.session_state.preview_day_idx - 1)
+                    st.session_state.preview_day_idx = max(0, st.session_state.preview_day_idx - 1)
+                    st.rerun()
             with col_next:
                 if st.button("Next Day ➡️"):
-                    st.session_state.preview_day_idx = min(total_days - 1,
-                                                           st.session_state.preview_day_idx + 1)
+                    st.session_state.preview_day_idx = min(total_days - 1, st.session_state.preview_day_idx + 1)
+                    st.rerun()
+            with col_reset:
+                if st.button("🔄 Reset Layout"):
+                    current_day = week_days[st.session_state.preview_day_idx]
+                    day_key = current_day.isoformat()
+                    if day_key in st.session_state.image_layouts:
+                        del st.session_state.image_layouts[day_key]
+                    st.rerun()
 
             # Current day
             current_day = week_days[st.session_state.preview_day_idx]
+            day_key = current_day.isoformat()
 
-            # Create a PDF page in memory with same formatting as generated PDF
-            buf = BytesIO()
-            c = canvas.Canvas(buf, pagesize=landscape(A4))
-            width, height = landscape(A4)
-
-            # Draw day heading
-            c.setFont("Helvetica-Bold", 40)
-            day_str = f"{calendar.day_name[current_day.weekday()]} {current_day.day} {calendar.month_name[current_day.month]}"
-            day_width = c.stringWidth(day_str, "Helvetica-Bold", 40)
-            c.drawString((width - day_width) / 2, height - 20 * mm, day_str)
-
-            # Disclaimer
-            c.setFont("Helvetica-Oblique", 14)
-            disclaimer_text = (
-                "Activities may change due to unforeseen circumstances. "
-                "Families are welcome to join. "
-                "Weather permitting, activities may move outdoors."
-            )
-            max_text_width = width - 80 * mm
-            words = disclaimer_text.split()
-            current_line = ""
-            wrapped_lines = []
-            for word in words:
-                test_line = (current_line + " " + word).strip()
-                if c.stringWidth(test_line, "Helvetica-Oblique",
-                                 12) > max_text_width and current_line:
-                    wrapped_lines.append(current_line)
-                    current_line = word
-                else:
-                    current_line = test_line
-            if current_line:
-                wrapped_lines.append(current_line)
-
-            line_spacing = 6 * mm
-            text_y = height - 30 * mm
-            for line in wrapped_lines:
-                line_width = c.stringWidth(line, "Helvetica-Oblique", 12)
-                c.drawString((width - line_width) / 2, text_y, line)
-                text_y -= line_spacing
-
-            y = text_y - 8 * mm
-
-            # Activities for the current day
-            text = st.session_state.get(f"{session_key}_{current_day}",
-                                        "").strip()
+            text = st.session_state.get(f"{session_key}_{current_day}", "").strip()
             if not text:
                 text = "(No activities planned)"
 
-            staff_lines = []
-            other_lines = []
-            for line in text.split("\n"):
-                line = clean_text(line)
-                if not line:
-                    continue
-                if line.lower().startswith("staff:"):
-                    staff_lines.append(line.strip())
-                else:
-                    other_lines.append(line.strip())
+            # Fetch images
+            images_list = get_images_for_day_activities(text, max_images=3)
 
-            staff_blue = Color(0, 0.298, 0.6)
-            if staff_lines:
-                combined_staff = " - ".join(staff_lines)
-                # wrap staff line
-                words = combined_staff.split()
-                current_line = ""
-                wrapped_staff = []
-                max_width = width - 35 * mm
-                for word in words:
-                    test_line = (current_line + " " + word).strip()
-                    if c.stringWidth(test_line, "Helvetica-Oblique",
-                                     15) > max_width and current_line:
-                        wrapped_staff.append(current_line)
-                        current_line = word
-                    else:
-                        current_line = test_line
-                if current_line:
-                    wrapped_staff.append(current_line)
+            # Get page dimensions
+            page_width, page_height = landscape(A4)
 
-                c.setFont("Helvetica-Oblique", 15)
-                c.setFillColor(staff_blue)
-                for wrapped in wrapped_staff:
-                    c.drawString(10 * mm, y, wrapped)
-                    y -= 9 * mm
-                y -= 5 * mm
+            # Initialize or get layouts for this day
+            if day_key not in st.session_state.image_layouts and images_list:
+                st.session_state.image_layouts[day_key] = get_default_image_layout(
+                    len(images_list), page_width, page_height
+                )
 
-            merged_activities = {}
-            for line in other_lines:
-                match = re.match(r"^(\d{1,2}:\d{2})\s*(.*)", line)
-                if match:
-                    time, desc = match.groups()
-                    merged_activities.setdefault(time, []).append(desc.strip())
-                else:
-                    merged_activities.setdefault(None, []).append(line.strip())
+            current_layouts = st.session_state.image_layouts.get(day_key, [])
 
-            for time, desc_list in merged_activities.items():
-                if all(d.isupper() for d in desc_list):
-                    combined_text = (" / ".join(
-                        desc_list) if time is None else f"{time}: " + " / ".join(
-                        desc_list))
-                    font_size = 15
-                    c.setFont("Helvetica-Bold", font_size)
-                    c.setFillColor(black)
-                else:
-                    combined_text = (" → ".join(
-                        desc_list) if time is None else f"{time}: " + " → ".join(
-                        desc_list))
-                    font_size = 22
-                    c.setFont("Helvetica-Bold", font_size)
-                    c.setFillColor(Color(0.1, 0.1, 0.1))
+            # Image editor controls
+            if images_list and current_layouts:
+                st.markdown("### 🖼️ Adjust Image Positions and Sizes")
 
-                x_start = 10 * mm
-                x_end = width - 80 * mm
-                max_width_text = x_end - x_start
+                for idx in range(len(images_list)):
+                    with st.expander(f"Image {idx + 1} Controls", expanded=(idx == 0)):
+                        col1, col2 = st.columns(2)
 
-                words = combined_text.split()
-                current_line = ""
-                wrapped_lines = []
-                for word in words:
-                    test_line = (current_line + " " + word).strip()
-                    if c.stringWidth(test_line, "Helvetica-Bold",
-                                     font_size) > max_width_text and current_line:
-                        wrapped_lines.append(current_line)
-                        current_line = word
-                    else:
-                        current_line = test_line
-                if current_line:
-                    wrapped_lines.append(current_line)
+                        with col1:
+                            st.markdown("**Position (X, Y)**")
+                            x_pos = st.slider(
+                                f"X Position (Image {idx + 1})",
+                                min_value=0,
+                                max_value=int(page_width),
+                                value=int(current_layouts[idx]["x"]),
+                                step=5,
+                                key=f"x_{day_key}_{idx}"
+                            )
+                            y_pos = st.slider(
+                                f"Y Position (Image {idx + 1})",
+                                min_value=0,
+                                max_value=int(page_height),
+                                value=int(current_layouts[idx]["y"]),
+                                step=5,
+                                key=f"y_{day_key}_{idx}"
+                            )
 
-                for wrapped in wrapped_lines:
-                    c.drawString(x_start, y, wrapped.strip())
-                    y -= 8 * mm if not all(
-                        d.isupper() for d in desc_list) else 7 * mm
+                        with col2:
+                            st.markdown("**Size (Width, Height)**")
+                            width = st.slider(
+                                f"Width (Image {idx + 1})",
+                                min_value=50,
+                                max_value=int(page_width * 0.5),
+                                value=int(current_layouts[idx]["width"]),
+                                step=5,
+                                key=f"w_{day_key}_{idx}"
+                            )
+                            height = st.slider(
+                                f"Height (Image {idx + 1})",
+                                min_value=50,
+                                max_value=int(page_height * 0.8),
+                                value=int(current_layouts[idx]["height"]),
+                                step=5,
+                                key=f"h_{day_key}_{idx}"
+                            )
 
-                y -= 6 * mm
-                if y < 25 * mm:
-                    c.showPage()
-                    y = height - 40 * mm
+                        # Update layout
+                        current_layouts[idx] = {
+                            "x": x_pos,
+                            "y": y_pos,
+                            "width": width,
+                            "height": height
+                        }
 
-            c.showPage()
-            c.save()
-            buf.seek(0)
+                # Save updated layouts
+                st.session_state.image_layouts[day_key] = current_layouts
 
-            # Convert PDF page to image
-            doc = fitz.open(stream=buf.read(), filetype="pdf")
-            page = doc[0]
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # high-res
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                # Generate preview
+                st.markdown("### 📄 Live Preview")
+                preview_img = create_preview_image_with_layout(
+                    page_width, page_height, current_day, text,
+                    images_list, current_layouts
+                )
+                st.image(preview_img, use_container_width=True, caption=f"Day {st.session_state.preview_day_idx + 1} of {total_days}")
 
-            st.image(img, use_container_width=True)
-            st.caption(
-                f"Day {st.session_state.preview_day_idx + 1} of {total_days} in this week")
+            elif not images_list:
+                st.info("No images available for this day's activities.")
 
         else:
             st.info("Please select a valid week to preview.")
@@ -1026,129 +1399,20 @@ if session_key in st.session_state:
                 width, height = landscape(A4)
 
                 for d in week_days:
-                    c.setFont("Helvetica-Bold", 40)
-                    c.setFillColor(black)
-                    day_str = f"{calendar.day_name[d.weekday()]} {ordinal(d.day)} {calendar.month_name[d.month]}"
-                    day_width = c.stringWidth(day_str, "Helvetica-Bold", 40)
-                    c.drawString((width - day_width) / 2, height - 20 * mm, day_str)
-
-                    # Disclaimer
-                    c.setFont("Helvetica-Oblique", 14)
-                    disclaimer_text = (
-                        "Activities may change due to unforeseen circumstances. "
-                        "Families are welcome to join. "
-                        "Weather permitting, activities may move outdoors."
-                    )
-                    max_text_width = width - 80 * mm
-                    words = disclaimer_text.split()
-                    current_line = ""
-                    wrapped_lines = []
-                    for word in words:
-                        test_line = (current_line + " " + word).strip()
-                        if c.stringWidth(test_line, "Helvetica-Oblique", 12) > max_text_width and current_line:
-                            wrapped_lines.append(current_line)
-                            current_line = word
-                        else:
-                            current_line = test_line
-                    if current_line:
-                        wrapped_lines.append(current_line)
-
-                    line_spacing = 6 * mm
-                    text_y = height - 30 * mm
-                    for line in wrapped_lines:
-                        line_width = c.stringWidth(line, "Helvetica-Oblique", 12)
-                        c.drawString((width - line_width) / 2, text_y, line)
-                        text_y -= line_spacing
-
-                    y = text_y - 8 * mm
-
                     text = st.session_state.get(f"{session_key}_{d}", "").strip()
                     if not text:
                         text = "(No activities planned)"
 
-                    staff_lines = []
-                    other_lines = []
-                    for line in text.split("\n"):
-                        line = clean_text(line)
-                        if not line:
-                            continue
-                        if line.lower().startswith("staff:"):
-                            staff_lines.append(line.strip())
-                        else:
-                            other_lines.append(line.strip())
+                    images_list = get_images_for_day_activities(text, max_images=3)
 
-                    staff_blue = Color(0, 0.298, 0.6)
-                    if staff_lines:
-                        combined_staff = " - ".join(staff_lines)
-                        # wrap staff line
-                        words = combined_staff.split()
-                        current_line = ""
-                        wrapped_staff = []
-                        max_width = width - 35 * mm
-                        for word in words:
-                            test_line = (current_line + " " + word).strip()
-                            if c.stringWidth(test_line, "Helvetica-Oblique", 15) > max_width and current_line:
-                                wrapped_staff.append(current_line)
-                                current_line = word
-                            else:
-                                current_line = test_line
-                        if current_line:
-                            wrapped_staff.append(current_line)
+                    # Get custom layout if exists
+                    day_key = d.isoformat()
+                    if day_key in st.session_state.image_layouts:
+                        layouts = st.session_state.image_layouts[day_key]
+                    else:
+                        layouts = get_default_image_layout(len(images_list), width, height) if images_list else None
 
-                        c.setFont("Helvetica-Oblique", 15)
-                        c.setFillColor(staff_blue)
-                        for wrapped in wrapped_staff:
-                            c.drawString(10 * mm, y, wrapped)
-                            y -= 9 * mm
-                        y -= 5 * mm
-
-                    merged_activities = {}
-                    for line in other_lines:
-                        match = re.match(r"^(\d{1,2}:\d{2})\s*(.*)", line)
-                        if match:
-                            time, desc = match.groups()
-                            merged_activities.setdefault(time, []).append(desc.strip())
-                        else:
-                            merged_activities.setdefault(None, []).append(line.strip())
-
-                    for time, desc_list in merged_activities.items():
-                        if all(d.isupper() for d in desc_list):
-                            combined_text = ( " / ".join(desc_list) if time is None else f"{time}: " + " / ".join(desc_list) )
-                            font_size = 15
-                            c.setFont("Helvetica-Bold", font_size)
-                            c.setFillColor(Color(0, 0, 0))
-                        else:
-                            combined_text = ( " → ".join(desc_list) if time is None else f"{time}: " + " → ".join(desc_list) )
-                            font_size = 22
-                            c.setFont("Helvetica-Bold", font_size)
-                            c.setFillColor(Color(0.1, 0.1, 0.1))
-
-                        x_start = 10 * mm
-                        x_end = width - 80 * mm
-                        max_width_text = x_end - x_start
-
-                        words = combined_text.split()
-                        current_line = ""
-                        wrapped_lines = []
-                        for word in words:
-                            test_line = (current_line + " " + word).strip()
-                            if c.stringWidth(test_line, "Helvetica-Bold", font_size) > max_width_text and current_line:
-                                wrapped_lines.append(current_line)
-                                current_line = word
-                            else:
-                                current_line = test_line
-                        if current_line:
-                            wrapped_lines.append(current_line)
-
-                        for wrapped in wrapped_lines:
-                            c.drawString(x_start, y, wrapped.strip())
-                            y -= 8 * mm if not all(d.isupper() for d in desc_list) else 7 * mm
-
-                        y -= 6 * mm
-                        if y < 25 * mm:
-                            c.showPage()
-                            y = height - 40 * mm
-
+                    draw_weekly_page_with_custom_layout(c, width, height, d, text, images_list, layouts)
                     c.showPage()
 
                 c.save()
@@ -1161,7 +1425,7 @@ if session_key in st.session_state:
                     mime="application/pdf",
                 )
 
-        # --- Generate all weeks (preserve prior behavior but clearer) ---
+        # --- Generate all weeks ---
         if st.button("📅 Generate All Weeks (A4 Landscape)"):
             with st.spinner("Generating PDFs for all weeks..."):
                 all_week_buffers = []
@@ -1169,131 +1433,23 @@ if session_key in st.session_state:
                     buf = BytesIO()
                     c = canvas.Canvas(buf, pagesize=landscape(A4))
                     width, height = landscape(A4)
-                    # build pages for each day in this week
+
                     week_days = [start_date + dt.timedelta(days=i) for i in range((end_date - start_date).days + 1)]
                     for d in week_days:
-                        c.setFont("Helvetica-Bold", 40)
-                        c.setFillColor(black)
-                        day_str = f"{calendar.day_name[d.weekday()]} {ordinal(d.day)} {calendar.month_name[d.month]}"
-                        day_width = c.stringWidth(day_str, "Helvetica-Bold", 40)
-                        c.drawString((width - day_width) / 2, height - 20 * mm, day_str)
-
-                        c.setFont("Helvetica-Oblique", 14)
-                        disclaimer_text = (
-                            "Activities may change due to unforeseen circumstances. "
-                            "Families are welcome to join. "
-                            "Weather permitting, activities may move outdoors."
-                        )
-                        max_text_width = width - 80 * mm
-                        words = disclaimer_text.split()
-                        current_line = ""
-                        wrapped_lines = []
-                        for word in words:
-                            test_line = (current_line + " " + word).strip()
-                            if c.stringWidth(test_line, "Helvetica-Oblique", 12) > max_text_width and current_line:
-                                wrapped_lines.append(current_line)
-                                current_line = word
-                            else:
-                                current_line = test_line
-                        if current_line:
-                            wrapped_lines.append(current_line)
-
-                        line_spacing = 6 * mm
-                        text_y = height - 30 * mm
-                        for line in wrapped_lines:
-                            line_width = c.stringWidth(line, "Helvetica-Oblique", 12)
-                            c.drawString((width - line_width) / 2, text_y, line)
-                            text_y -= line_spacing
-
-                        y = text_y - 8 * mm
-
                         text = st.session_state.get(f"{session_key}_{d}", "").strip()
                         if not text:
                             text = "(No activities planned)"
 
-                        staff_lines = []
-                        other_lines = []
-                        for line in text.split("\n"):
-                            line = clean_text(line)
-                            if not line:
-                                continue
-                            if line.lower().startswith("staff:"):
-                                staff_lines.append(line.strip())
-                            else:
-                                other_lines.append(line.strip())
+                        images_list = get_images_for_day_activities(text, max_images=3)
 
-                        staff_blue = Color(0, 0.298, 0.6)
-                        if staff_lines:
-                            combined_staff = " - ".join(staff_lines)
-                            # wrap staff
-                            words = combined_staff.split()
-                            current_line = ""
-                            wrapped_staff = []
-                            max_width = width - 35 * mm
-                            for word in words:
-                                test_line = (current_line + " " + word).strip()
-                                if c.stringWidth(test_line, "Helvetica-Oblique", 15) > max_width and current_line:
-                                    wrapped_staff.append(current_line)
-                                    current_line = word
-                                else:
-                                    current_line = test_line
-                            if current_line:
-                                wrapped_staff.append(current_line)
+                        # Get custom layout if exists
+                        day_key = d.isoformat()
+                        if day_key in st.session_state.image_layouts:
+                            layouts = st.session_state.image_layouts[day_key]
+                        else:
+                            layouts = get_default_image_layout(len(images_list), width, height) if images_list else None
 
-                            c.setFont("Helvetica-Oblique", 15)
-                            c.setFillColor(staff_blue)
-                            for wrapped in wrapped_staff:
-                                c.drawString(10 * mm, y, wrapped)
-                                y -= 9 * mm
-                            y -= 5 * mm
-
-                        merged_activities = {}
-                        for line in other_lines:
-                            match = re.match(r"^(\d{1,2}:\d{2})\s*(.*)", line)
-                            if match:
-                                time, desc = match.groups()
-                                merged_activities.setdefault(time, []).append(desc.strip())
-                            else:
-                                merged_activities.setdefault(None, []).append(line.strip())
-
-                        for time, desc_list in merged_activities.items():
-                            if all(d.isupper() for d in desc_list):
-                                combined_text = ( " / ".join(desc_list) if time is None else f"{time}: " + " / ".join(desc_list) )
-                                font_size = 15
-                                c.setFont("Helvetica-Bold", font_size)
-                                c.setFillColor(Color(0, 0, 0))
-                            else:
-                                combined_text = ( " → ".join(desc_list) if time is None else f"{time}: " + " → ".join(desc_list) )
-                                font_size = 22
-                                c.setFont("Helvetica-Bold", font_size)
-                                c.setFillColor(Color(0.1, 0.1, 0.1))
-
-                            x_start = 10 * mm
-                            x_end = width - 80 * mm
-                            max_width_text = x_end - x_start
-
-                            words = combined_text.split()
-                            current_line = ""
-                            wrapped_lines = []
-                            for word in words:
-                                test_line = (current_line + " " + word).strip()
-                                if c.stringWidth(test_line, "Helvetica-Bold", font_size) > max_width_text and current_line:
-                                    wrapped_lines.append(current_line)
-                                    current_line = word
-                                else:
-                                    current_line = test_line
-                            if current_line:
-                                wrapped_lines.append(current_line)
-
-                            for wrapped in wrapped_lines:
-                                c.drawString(x_start, y, wrapped.strip())
-                                y -= 8 * mm if not all(d.isupper() for d in desc_list) else 7 * mm
-
-                            y -= 6 * mm
-                            if y < 25 * mm:
-                                c.showPage()
-                                y = height - 40 * mm
-
+                        draw_weekly_page_with_custom_layout(c, width, height, d, text, images_list, layouts)
                         c.showPage()
 
                     c.save()
