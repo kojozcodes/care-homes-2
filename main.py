@@ -873,35 +873,90 @@ def draw_weekly_page_with_custom_layout(c, width, height, day_obj, text, image_b
 
 def create_preview_image_with_layout(width, height, day_obj, text, image_bytes_list=None, image_layouts=None):
     """
-    Create a preview image using PIL to show the layout with custom positioned images.
+    Create a preview image using PIL that matches the PDF layout exactly.
     Returns PIL Image object.
     """
     # Create white background
     img = Image.new('RGB', (int(width), int(height)), color='white')
     draw = ImageDraw.Draw(img)
 
-    # Define layout areas
+    # Define layout areas (matching PDF)
     text_area_right = int(width * 0.62)
 
-    # Try to use a font, fallback to default
+    # Try to load fonts (matching PDF sizes)
     try:
         title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
-        body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
-        activity_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
+        disclaimer_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf", 12)
+        staff_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf", 15)
+        activity_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
+        holiday_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 15)
     except:
+        # Fallback to default fonts with approximate sizes
         title_font = ImageFont.load_default()
-        body_font = ImageFont.load_default()
+        disclaimer_font = ImageFont.load_default()
+        staff_font = ImageFont.load_default()
         activity_font = ImageFont.load_default()
+        holiday_font = ImageFont.load_default()
 
-    # Draw day heading
+    # Draw day heading (matching PDF position)
     day_str = f"{calendar.day_name[day_obj.weekday()]} {day_obj.day} {calendar.month_name[day_obj.month]}"
-    draw.text((text_area_right // 2, 50), day_str, fill='black', font=title_font, anchor="mt")
+    # Center in left area
+    try:
+        bbox = draw.textbbox((0, 0), day_str, font=title_font)
+        day_width = bbox[2] - bbox[0]
+    except:
+        day_width = len(day_str) * 20  # Fallback estimate
 
-    # Draw disclaimer
-    disclaimer_text = "Activities may change. Families welcome. Weather permitting, activities may move outdoors."
-    draw.text((text_area_right // 2, 110), disclaimer_text, fill='gray', font=body_font, anchor="mt")
+    day_x = (text_area_right - day_width) // 2
+    day_y = int(20 * 2.83465)  # 20mm from top
+    draw.text((day_x, day_y), day_str, fill='black', font=title_font)
 
-    # Draw images with custom layout
+    # Draw disclaimer (matching PDF position and wrapping)
+    disclaimer_text = (
+        "Activities may change due to unforeseen circumstances. "
+        "Families are welcome to join. "
+        "Weather permitting, activities may move outdoors."
+    )
+
+    # Wrap disclaimer text (matching PDF logic)
+    max_disclaimer_width = text_area_right - int(20 * 2.83465)
+    words = disclaimer_text.split()
+    current_line = ""
+    wrapped_lines = []
+
+    for word in words:
+        test_line = (current_line + " " + word).strip()
+        try:
+            bbox = draw.textbbox((0, 0), test_line, font=disclaimer_font)
+            line_width = bbox[2] - bbox[0]
+        except:
+            line_width = len(test_line) * 7
+
+        if line_width > max_disclaimer_width and current_line:
+            wrapped_lines.append(current_line)
+            current_line = word
+        else:
+            current_line = test_line
+    if current_line:
+        wrapped_lines.append(current_line)
+
+    # Draw wrapped disclaimer
+    line_spacing = int(6 * 2.83465)
+    text_y = int(30 * 2.83465)  # 30mm from top
+
+    for line in wrapped_lines:
+        try:
+            bbox = draw.textbbox((0, 0), line, font=disclaimer_font)
+            line_width = bbox[2] - bbox[0]
+        except:
+            line_width = len(line) * 7
+        line_x = (text_area_right - line_width) // 2
+        draw.text((line_x, text_y), line, fill='gray', font=disclaimer_font)
+        text_y += line_spacing
+
+    y_pos = text_y + int(8 * 2.83465)  # 8mm gap
+
+    # Draw images with custom layout (matching PDF)
     if image_bytes_list and image_layouts:
         for idx, (image_bytes, layout) in enumerate(zip(image_bytes_list, image_layouts)):
             try:
@@ -910,35 +965,126 @@ def create_preview_image_with_layout(width, height, day_obj, text, image_bytes_l
                 # Resize to fit layout
                 pil_img = pil_img.resize((int(layout["width"]), int(layout["height"])), Image.Resampling.LANCZOS)
 
-                # Draw gray background
-                bg_x = int(layout["x"] - 3 * mm)
-                bg_y = int(height - layout["y"] - layout["height"] - 3 * mm)  # Flip Y
-                bg_w = int(layout["width"] + 6 * mm)
-                bg_h = int(layout["height"] + 6 * mm)
-                draw.rounded_rectangle([bg_x, bg_y, bg_x + bg_w, bg_y + bg_h],
-                                      radius=8, fill='lightgray')
+                # Draw gray background (matching PDF rounded rectangle)
+                bg_x = int(layout["x"] - 3 * 2.83465)
+                bg_y = int(height - layout["y"] - layout["height"] - 3 * 2.83465)  # Flip Y
+                bg_w = int(layout["width"] + 6 * 2.83465)
+                bg_h = int(layout["height"] + 6 * 2.83465)
+
+                draw.rounded_rectangle(
+                    [bg_x, bg_y, bg_x + bg_w, bg_y + bg_h],
+                    radius=8,
+                    fill=(242, 242, 242)  # Light gray matching PDF
+                )
 
                 # Paste image
                 img_x = int(layout["x"])
                 img_y = int(height - layout["y"] - layout["height"])  # Flip Y for PIL
                 img.paste(pil_img, (img_x, img_y))
 
-                # Draw border for visibility
-                draw.rectangle([img_x, img_y, img_x + int(layout["width"]),
-                              img_y + int(layout["height"])],
-                             outline='red', width=2)
-
             except Exception as e:
                 pass
 
-    # Draw activity text
-    y_pos = 180
-    for line in text.split("\n")[:10]:  # Limit to 10 lines for preview
+    # Parse and draw text content (matching PDF logic exactly)
+    staff_lines = []
+    other_lines = []
+
+    for line in text.split("\n"):
         line = clean_text(line).strip()
         if not line:
             continue
-        draw.text((20, y_pos), line, fill='black', font=body_font)
-        y_pos += 25
+        if line.lower().startswith("staff:"):
+            staff_lines.append(line.strip())
+        else:
+            other_lines.append(line.strip())
+
+    # Draw staff lines (matching PDF)
+    staff_blue = (0, 76, 153)  # RGB for Color(0, 0.298, 0.6)
+
+    if staff_lines:
+        combined_staff = " - ".join(staff_lines)
+        words = combined_staff.split()
+        current_line = ""
+        wrapped_staff = []
+        max_width = text_area_right - int(20 * 2.83465)
+
+        for word in words:
+            test_line = (current_line + " " + word).strip()
+            try:
+                bbox = draw.textbbox((0, 0), test_line, font=staff_font)
+                line_width = bbox[2] - bbox[0]
+            except:
+                line_width = len(test_line) * 9
+
+            if line_width > max_width and current_line:
+                wrapped_staff.append(current_line)
+                current_line = word
+            else:
+                current_line = test_line
+        if current_line:
+            wrapped_staff.append(current_line)
+
+        for wrapped in wrapped_staff:
+            draw.text((int(10 * 2.83465), y_pos), wrapped, fill=staff_blue, font=staff_font)
+            y_pos += int(9 * 2.83465)
+        y_pos += int(5 * 2.83465)
+
+    # Draw activities (matching PDF merging and formatting logic)
+    merged_activities = {}
+    for line in other_lines:
+        match = re.match(r"^(\d{1,2}:\d{2})\s*(.*)", line)
+        if match:
+            time, desc = match.groups()
+            merged_activities.setdefault(time, []).append(desc.strip())
+        else:
+            merged_activities.setdefault(None, []).append(line.strip())
+
+    for time, desc_list in merged_activities.items():
+        # Check if all uppercase (holiday)
+        if all(d.isupper() for d in desc_list):
+            combined_text = (" / ".join(desc_list) if time is None else f"{time}: " + " / ".join(desc_list))
+            current_font = holiday_font
+            font_color = (0, 0, 0)  # Black
+            line_spacing_val = int(7 * 2.83465)
+        else:
+            combined_text = (" → ".join(desc_list) if time is None else f"{time}: " + " → ".join(desc_list))
+            current_font = activity_font
+            font_color = (26, 26, 26)  # Dark gray matching Color(0.1, 0.1, 0.1)
+            line_spacing_val = int(8 * 2.83465)
+
+        x_start = int(10 * 2.83465)
+        max_width_text = text_area_right - int(20 * 2.83465)
+
+        # Word wrap
+        words = combined_text.split()
+        current_line = ""
+        wrapped_lines = []
+
+        for word in words:
+            test_line = (current_line + " " + word).strip()
+            try:
+                bbox = draw.textbbox((0, 0), test_line, font=current_font)
+                line_width = bbox[2] - bbox[0]
+            except:
+                line_width = len(test_line) * 13
+
+            if line_width > max_width_text and current_line:
+                wrapped_lines.append(current_line)
+                current_line = word
+            else:
+                current_line = test_line
+        if current_line:
+            wrapped_lines.append(current_line)
+
+        for wrapped in wrapped_lines:
+            draw.text((x_start, y_pos), wrapped.strip(), fill=font_color, font=current_font)
+            y_pos += line_spacing_val
+
+        y_pos += int(6 * 2.83465)  # Gap between activities
+
+        # Stop if we run out of space
+        if y_pos > height - int(25 * 2.83465):
+            break
 
     return img
 
