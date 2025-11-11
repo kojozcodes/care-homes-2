@@ -3,3 +3,5 @@
 .streamlit/secrets.toml
 .env
 calendar_settings.json
+image_cache
+layout_templates

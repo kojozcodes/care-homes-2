@@ -1,7 +1,7 @@
 """
 main.py
 
-Care Home Monthly Calendar – Streamlit app (refactored with Pexels integration)
+Care Home Monthly Calendar – Streamlit app (refactored with Pexels integration and image selection)
 
 Features:
 - Secure single-user login (uses Streamlit secrets["APP_PASSWORD"])
@@ -11,8 +11,8 @@ Features:
 - A3 monthly PDF export (styled)
 - Weekly splitting (4-5 weeks) + UI to choose a week
 - Generate A4 weekly PDF for a selected week, or all weeks
-- Pexels API integration for activity-based images on weekly PDFs (3 images per day)
-- Interactive image editor to move and resize images before PDF generation
+- Pexels API integration with 5 image options per activity
+- Interactive image selection and layout editor
 """
 
 import streamlit as st
@@ -32,6 +32,7 @@ from reportlab.lib.colors import Color, black, white
 from reportlab.lib.units import mm
 import requests
 from PIL import Image, ImageDraw, ImageFont
+import random
 
 # -------------------------
 # Page configuration
@@ -51,6 +52,13 @@ os.makedirs(IMAGE_CACHE_DIR, exist_ok=True)
 # -------------------------
 # Activity Keyword Mapping
 # -------------------------
+# Keywords that should take priority when found in activity names
+PRIORITY_KEYWORDS = [
+    "quiz", "book", "bingo", "music", "painting", "baking", "gardening",
+    "yoga", "exercise", "knitting", "singing", "walking", "tea", "coffee",
+    "film", "movie", "dogs", "crafts", "dominoes", "cards", "scrabble", "jigsaw"
+]
+
 ACTIVITY_KEYWORDS = {
     "gardening": "gardening flowers nature",
     "dogs for health": "dogs therapy animals",
@@ -537,6 +545,17 @@ def get_activity_keyword(activity_name):
     """
     activity_lower = activity_name.lower().strip()
 
+    # Check for priority keywords first (e.g., "quiz", "book")
+    for keyword in PRIORITY_KEYWORDS:
+        if keyword in activity_lower:
+            # Return more specific search terms for better results
+            if keyword == "book":
+                return "books reading"
+            elif keyword == "quiz":
+                return "quiz trivia"
+            else:
+                return keyword
+
     # Check for direct matches
     if activity_lower in ACTIVITY_KEYWORDS:
         return ACTIVITY_KEYWORDS[activity_lower]
@@ -551,70 +570,68 @@ def get_activity_keyword(activity_name):
     return cleaned if cleaned else "seniors activity"
 
 
-@st.cache_data(ttl=86400)  # Cache for 24 hours
-def fetch_pexels_image(keyword, orientation="landscape", size="medium"):
+def fetch_pexels_images(keyword, orientation="landscape", size="medium", count=5, page=1):
     """
-    Fetch an image from Pexels API based on keyword.
-    Returns image bytes or None if fetch fails.
+    Fetch multiple images from Pexels API based on keyword.
+    Returns list of image bytes or empty list if fetch fails.
     """
     if not PEXELS_API_KEY:
-        return None
-
-    # Create cache filename
-    cache_key = hashlib.md5(f"{keyword}_{orientation}_{size}".encode()).hexdigest()
-    cache_path = os.path.join(IMAGE_CACHE_DIR, f"{cache_key}.jpg")
-
-    # Check cache first
-    if os.path.exists(cache_path):
-        try:
-            with open(cache_path, "rb") as f:
-                return f.read()
-        except Exception:
-            pass
+        return []
 
     # Fetch from Pexels
     headers = {"Authorization": PEXELS_API_KEY}
     params = {
         "query": keyword,
         "orientation": orientation,
-        "per_page": 1,
-        "page": 1
+        "per_page": count,
+        "page": page
     }
 
+    images = []
     try:
         response = requests.get(PEXELS_SEARCH_URL, headers=headers, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 
         if data.get("photos") and len(data["photos"]) > 0:
-            photo = data["photos"][0]
+            for photo in data["photos"]:
+                # Choose appropriate size
+                if size == "large":
+                    image_url = photo["src"].get("large2x", photo["src"]["large"])
+                elif size == "small":
+                    image_url = photo["src"].get("small", photo["src"]["medium"])
+                else:
+                    image_url = photo["src"]["medium"]
 
-            # Choose appropriate size
-            if size == "large":
-                image_url = photo["src"].get("large2x", photo["src"]["large"])
-            elif size == "small":
-                image_url = photo["src"].get("small", photo["src"]["medium"])
-            else:
-                image_url = photo["src"]["medium"]
+                # Download image
+                img_response = requests.get(image_url, timeout=10)
+                img_response.raise_for_status()
+                img_bytes = img_response.content
 
-            # Download image
-            img_response = requests.get(image_url, timeout=10)
-            img_response.raise_for_status()
-            img_bytes = img_response.content
+                # Cache the image
+                cache_key = hashlib.md5(f"{keyword}_{photo['id']}".encode()).hexdigest()
+                cache_path = os.path.join(IMAGE_CACHE_DIR, f"{cache_key}.jpg")
+                try:
+                    with open(cache_path, "wb") as f:
+                        f.write(img_bytes)
+                except Exception:
+                    pass
 
-            # Cache the image
-            try:
-                with open(cache_path, "wb") as f:
-                    f.write(img_bytes)
-            except Exception:
-                pass
-
-            return img_bytes
+                images.append(img_bytes)
 
     except Exception:
         pass
 
-    return None
+    return images
+
+
+def fetch_pexels_image(keyword, orientation="landscape", size="medium", page=1):
+    """
+    Fetch a single image from Pexels API based on keyword.
+    Returns image bytes or None if fetch fails.
+    """
+    images = fetch_pexels_images(keyword, orientation, size, count=1, page=page)
+    return images[0] if images else None
 
 
 def extract_activities_from_text(text):
@@ -1403,11 +1420,19 @@ if session_key in st.session_state:
         # Weekly Preview with Image Editor
         # -------------------------
         st.markdown("---")
-        st.write("## 🎨 Interactive Image Editor & Preview")
+        st.write("## 🎨 Image Selection & Layout Editor")
 
         # Initialize image layouts in session state
         if "image_layouts" not in st.session_state:
             st.session_state.image_layouts = {}
+
+        # Initialize selected images storage
+        if "selected_images" not in st.session_state:
+            st.session_state.selected_images = {}
+
+        # Initialize image options cache
+        if "image_options" not in st.session_state:
+            st.session_state.image_options = {}
 
         # Initialize preview indices
         if "preview_week_idx" not in st.session_state:
@@ -1449,8 +1474,137 @@ if session_key in st.session_state:
             if not text:
                 text = "(No activities planned)"
 
-            # Fetch images
-            images_list = get_images_for_day_activities(text, max_images=3)
+            # Extract activities for image fetching
+            activities = extract_activities_from_text(text)
+            unique_activities = []
+            seen = set()
+            for activity in activities:
+                activity_lower = activity.lower().strip()
+                if activity_lower not in seen:
+                    unique_activities.append(activity)
+                    seen.add(activity_lower)
+
+            # Store all activities but only allow selecting 3
+            max_selectable = 3
+
+            # -------------------------
+            # Image Selection Interface
+            # -------------------------
+            st.markdown("### 🖼️ Step 1: Choose Images for Each Activity")
+            st.info(
+                f"ℹ️ Found {len(unique_activities)} activities. You can select images for all of them, but only 3 will appear in the final document.")
+
+            if not unique_activities:
+                st.info("No activities found for this day.")
+                images_list = []
+            else:
+                images_list = []
+
+                # Initialize page numbers for refresh functionality
+                if "image_page_numbers" not in st.session_state:
+                    st.session_state.image_page_numbers = {}
+
+                for act_idx, activity in enumerate(unique_activities):
+                    st.markdown(f"**Activity {act_idx + 1}: {activity}**")
+
+                    activity_key = f"{day_key}_{act_idx}"
+
+                    # Initialize page number for this activity
+                    if activity_key not in st.session_state.image_page_numbers:
+                        st.session_state.image_page_numbers[activity_key] = 1
+
+                    # Check if we need to fetch options
+                    if activity_key not in st.session_state.image_options:
+                        keyword = get_activity_keyword(activity)
+                        with st.spinner(
+                                f"Fetching images for '{activity}' using keyword: '{keyword}'..."):
+                            page_num = st.session_state.image_page_numbers[
+                                activity_key]
+                            options = fetch_pexels_images(keyword,
+                                                          orientation="landscape",
+                                                          size="medium",
+                                                          count=5,
+                                                          page=page_num)
+                        st.session_state.image_options[
+                            activity_key] = options
+
+                    options = st.session_state.image_options[activity_key]
+
+                    if not options:
+                        st.warning(f"No images found for '{activity}'")
+                        continue
+
+                    # Display image options in columns
+                    cols = st.columns(min(5, len(options)))
+
+                    for img_idx, img_bytes in enumerate(options):
+                        with cols[img_idx]:
+                            st.image(img_bytes,
+                                     caption=f"Option {img_idx + 1}",
+                                     use_container_width=True)
+                            if st.button(f"Select",
+                                         key=f"select_{activity_key}_{img_idx}"):
+                                st.session_state.selected_images[
+                                    activity_key] = img_bytes
+                                st.rerun()
+
+                    # Refresh button and selection status
+                    col_refresh, col_status = st.columns([1, 3])
+                    with col_refresh:
+                        if st.button("🔄 Refresh Images",
+                                     key=f"refresh_{activity_key}"):
+                            # Increment page number to get different results
+                            st.session_state.image_page_numbers[
+                                activity_key] += 1
+                            page_num = \
+                            st.session_state.image_page_numbers[
+                                activity_key]
+                            keyword = get_activity_keyword(
+                                activity)
+                            with st.spinner(
+                                    f"Fetching new images for '{activity}' (page {page_num}) using keyword: '{keyword}'..."):
+                                new_options = fetch_pexels_images(
+                                    keyword,
+                                    orientation="landscape",
+                                    size="medium", count=5,
+                                    page=page_num)
+
+                            # Update options even if empty (to show "no more results")
+                            st.session_state.image_options[
+                                activity_key] = new_options
+
+                            if not new_options:
+                                # Reset to page 1 if we've run out of results
+                                st.session_state.image_page_numbers[
+                                    activity_key] = 1
+                                with st.spinner(
+                                        f"No more results. Fetching from page 1 using keyword: '{keyword}'..."):
+                                    new_options = fetch_pexels_images(
+                                        keyword,
+                                        orientation="landscape",
+                                        size="medium", count=5,
+                                        page=1)
+                                st.session_state.image_options[
+                                    activity_key] = new_options
+
+                            st.rerun()
+
+                    with col_status:
+                        if activity_key in st.session_state.selected_images:
+                            st.success(f"✓ Image selected for {activity}")
+                        else:
+                            st.info(f"Please select an image for {activity}")
+
+                    st.markdown("---")
+
+                # Collect selected images for this day (limit to 3 for display)
+                for act_idx, activity in enumerate(unique_activities):
+                    activity_key = f"{day_key}_{act_idx}"
+                    if activity_key in st.session_state.selected_images:
+                        images_list.append(
+                            st.session_state.selected_images[activity_key])
+                        if len(images_list) >= max_selectable:
+                            break
 
             # Get page dimensions
             page_width, page_height = landscape(A4)
@@ -1465,10 +1619,20 @@ if session_key in st.session_state:
 
             # Image editor controls
             if images_list and current_layouts:
-                st.markdown("### 🖼️ Adjust Image Positions and Sizes")
+                st.markdown("### 📐 Step 2: Adjust Image Positions and Sizes")
 
                 for idx in range(len(images_list)):
-                    with st.expander(f"Image {idx + 1} Controls", expanded=(idx == 0)):
+                    # Ensure layout entry exists for each image
+                    if idx >= len(current_layouts):
+                        current_layouts.append({
+                            "x": 50,
+                            "y": 50,
+                            "width": int(page_width * 0.3),
+                            "height": int(page_height * 0.25)
+                        })
+
+                    with st.expander(f"Image {idx + 1} Position Controls",
+                                     expanded=(idx == 0)):
                         col1, col2 = st.columns(2)
 
                         with col1:
@@ -1521,7 +1685,7 @@ if session_key in st.session_state:
                 st.session_state.image_layouts[day_key] = current_layouts
 
                 # Generate preview
-                st.markdown("### 📄 Live Preview")
+                st.markdown("### 📄 Step 3: Live Preview")
                 preview_img = create_preview_image_with_layout(
                     page_width, page_height, current_day, text,
                     images_list, current_layouts
@@ -1529,7 +1693,7 @@ if session_key in st.session_state:
                 st.image(preview_img, use_container_width=True, caption=f"Day {st.session_state.preview_day_idx + 1} of {total_days}")
 
             elif not images_list:
-                st.info("No images available for this day's activities.")
+                st.info("📝 Select images in Step 1 above to see the preview and layout controls.")
 
         else:
             st.info("Please select a valid week to preview.")
@@ -1545,20 +1709,43 @@ if session_key in st.session_state:
                 width, height = landscape(A4)
 
                 for d in week_days:
-                    text = st.session_state.get(f"{session_key}_{d}", "").strip()
+                    text = st.session_state.get(f"{session_key}_{d}",
+                                                "").strip()
                     if not text:
                         text = "(No activities planned)"
 
-                    images_list = get_images_for_day_activities(text, max_images=3)
+                    # Use selected images if available
+                    d_key = d.isoformat()
+                    activities = extract_activities_from_text(text)
+                    unique_activities = []
+                    seen = set()
+                    for activity in activities:
+                        activity_lower = activity.lower().strip()
+                        if activity_lower not in seen:
+                            unique_activities.append(activity)
+                            seen.add(activity_lower)
+
+                    # Collect only selected images (up to 3)
+                    images_list = []
+                    for act_idx, activity in enumerate(unique_activities):
+                        activity_key = f"{d_key}_{act_idx}"
+                        if activity_key in st.session_state.selected_images:
+                            images_list.append(
+                                st.session_state.selected_images[activity_key])
+                            if len(images_list) >= 3:
+                                break
 
                     # Get custom layout if exists
-                    day_key = d.isoformat()
-                    if day_key in st.session_state.image_layouts:
-                        layouts = st.session_state.image_layouts[day_key]
+                    if d_key in st.session_state.image_layouts and images_list:
+                        layouts = st.session_state.image_layouts[d_key]
                     else:
-                        layouts = get_default_image_layout(len(images_list), width, height) if images_list else None
+                        layouts = get_default_image_layout(len(images_list),
+                                                           width,
+                                                           height) if images_list else None
 
-                    draw_weekly_page_with_custom_layout(c, width, height, d, text, images_list, layouts)
+                    draw_weekly_page_with_custom_layout(c, width, height, d,
+                                                        text, images_list,
+                                                        layouts)
                     c.showPage()
 
                 c.save()
@@ -1582,20 +1769,45 @@ if session_key in st.session_state:
 
                     week_days = [start_date + dt.timedelta(days=i) for i in range((end_date - start_date).days + 1)]
                     for d in week_days:
-                        text = st.session_state.get(f"{session_key}_{d}", "").strip()
+                        text = st.session_state.get(f"{session_key}_{d}",
+                                                    "").strip()
                         if not text:
                             text = "(No activities planned)"
 
-                        images_list = get_images_for_day_activities(text, max_images=3)
+                        # Use selected images if available
+                        d_key = d.isoformat()
+                        activities = extract_activities_from_text(text)
+                        unique_activities = []
+                        seen = set()
+                        for activity in activities:
+                            activity_lower = activity.lower().strip()
+                            if activity_lower not in seen:
+                                unique_activities.append(activity)
+                                seen.add(activity_lower)
+
+                        # Collect only selected images (up to 3)
+                        images_list = []
+                        for act_idx, activity in enumerate(unique_activities):
+                            activity_key = f"{d_key}_{act_idx}"
+                            if activity_key in st.session_state.selected_images:
+                                images_list.append(
+                                    st.session_state.selected_images[
+                                        activity_key])
+                                if len(images_list) >= 3:
+                                    break
 
                         # Get custom layout if exists
-                        day_key = d.isoformat()
-                        if day_key in st.session_state.image_layouts:
-                            layouts = st.session_state.image_layouts[day_key]
+                        if d_key in st.session_state.image_layouts and images_list:
+                            layouts = st.session_state.image_layouts[d_key]
                         else:
-                            layouts = get_default_image_layout(len(images_list), width, height) if images_list else None
+                            layouts = get_default_image_layout(
+                                len(images_list), width,
+                                height) if images_list else None
 
-                        draw_weekly_page_with_custom_layout(c, width, height, d, text, images_list, layouts)
+                        draw_weekly_page_with_custom_layout(c, width, height,
+                                                            d, text,
+                                                            images_list,
+                                                            layouts)
                         c.showPage()
 
                     c.save()
