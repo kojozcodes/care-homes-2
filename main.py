@@ -13,6 +13,7 @@ Features:
 - Generate A4 weekly PDF for a selected week, or all weeks
 - Pexels API integration with 5 image options per activity
 - Interactive image selection and layout editor
+- Persisted monthly edits and saved default rules
 """
 
 import streamlit as st
@@ -50,6 +51,56 @@ PEXELS_SEARCH_URL = "https://api.pexels.com/v1/search"
 # Cache directory for images
 IMAGE_CACHE_DIR = "image_cache"
 os.makedirs(IMAGE_CACHE_DIR, exist_ok=True)
+
+# -------------------------
+# Settings file handling (moved up so settings are available before UI)
+# -------------------------
+SETTINGS_FILE = "calendar_settings.json"
+
+
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_settings(data):
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        st.error(f"Error saving settings: {e}")
+
+
+# -------------------------
+# Monthly data persistence
+# -------------------------
+def save_monthly_data(year, month, data):
+    """Save edited month data (dict[date -> text]) to disk."""
+    filename = f"calendar_data_{year}_{month:02d}.json"
+    try:
+        serialisable = {d.isoformat(): v for d, v in data.items()}
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(serialisable, f, indent=2)
+    except Exception as e:
+        st.error(f"Error saving monthly data: {e}")
+
+
+def load_monthly_data(year, month):
+    filename = f"calendar_data_{year}_{month:02d}.json"
+    if os.path.exists(filename):
+        try:
+            with open(filename, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+                return {dt.date.fromisoformat(k): v for k, v in raw.items()}
+        except Exception:
+            return {}
+    return {}
+
 
 # -------------------------
 # Activity Keyword Mapping
@@ -97,6 +148,7 @@ ACTIVITY_KEYWORDS = {
 # Helper functions
 # -------------------------
 
+
 def clean_text(s):
     """
     Normalise and "clean" text input for safe PDF rendering.
@@ -133,6 +185,7 @@ def load_all_holidays():
 
 
 ALL_HOLIDAYS = load_all_holidays()
+
 
 def month_date_range(year: int, month: int):
     first = dt.date(year, month, 1)
@@ -178,6 +231,7 @@ def seat_activity_into_calendar(year, month, activities_df, rota_df, rules,
                                 include_holidays=True, daily_rules=None):
     """
     Build daymap: date -> list of event dicts (time, title, notes)
+    Supports date-specific activities via an optional `date` column in activities CSV.
     """
     first, last = month_date_range(year, month)
     daymap = {first + dt.timedelta(days=i): [] for i in range((last - first).days + 1)}
@@ -249,6 +303,33 @@ def seat_activity_into_calendar(year, month, activities_df, rota_df, rules,
             pref_time = str(r.get("preferred_time", "")).strip()
             freq = int(r.get("frequency", 0)) if str(r.get("frequency", "")).isdigit() else 0
             placed = 0
+
+            # ---- NEW: support specific date column in activities CSV ----
+            activity_date_raw = None
+            # r can be a Series with index; check both 'date' key and column existence
+            if isinstance(r, pd.Series):
+                if "date" in r.index:
+                    activity_date_raw = r.get("date")
+                else:
+                    activity_date_raw = None
+            else:
+                activity_date_raw = r.get("date") if "date" in r else None
+
+            specific_date = None
+            if pd.notna(activity_date_raw) and activity_date_raw:
+                try:
+                    specific_date = pd.to_datetime(activity_date_raw).date()
+                except Exception:
+                    specific_date = None
+
+            if specific_date:
+                # Place directly on that date if it is in the current month
+                if specific_date in daymap:
+                    activities.append({"date": specific_date, "time": pref_time, "title": name, "notes": "activity"})
+                # Skip the standard preferred-day logic for date-specific entries
+                continue
+            # ---- END NEW BLOCK ----
+
             for d in sorted(daymap.keys()):
                 if freq and placed >= freq:
                     break
@@ -259,6 +340,7 @@ def seat_activity_into_calendar(year, month, activities_df, rota_df, rules,
 
     # Normalize times and dedupe
     time_pattern = re.compile(r"^(\d{1,2})(?::?(\d{2}))?$")
+
     def normalize_time(t):
         if not t or not isinstance(t, str):
             return None
@@ -539,6 +621,7 @@ def draw_calendar_pdf(title, disclaimer, year, month, cell_texts, background_byt
 # -------------------------
 # Pexels Integration Functions
 # -------------------------
+
 
 def get_activity_keyword(activity_name):
     """
@@ -1129,30 +1212,6 @@ def get_weeks_in_month(year, month):
 
 
 # -------------------------
-# Settings file handling
-# -------------------------
-SETTINGS_FILE = "calendar_settings.json"
-
-
-def load_settings():
-    if os.path.exists(SETTINGS_FILE):
-        try:
-            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
-
-
-def save_settings(data):
-    try:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        st.error(f"Error saving settings: {e}")
-
-
-# -------------------------
 # Secure single-user login
 # -------------------------
 REAL_PASSWORD = st.secrets["APP_PASSWORD"]
@@ -1176,6 +1235,10 @@ if not st.session_state.logged_in:
 # -------------------------
 # Streamlit UI - Main
 # -------------------------
+
+# Load and persist settings into session state early so UI picks them up every run
+if "settings" not in st.session_state:
+    st.session_state["settings"] = load_settings()
 
 # Important Notice Alert
 st.warning("""
@@ -1223,6 +1286,7 @@ with st.expander("🎯 Activities CSV Format (Example)"):
             - `frequency` → Number of times per month  
             - `staff_required` → Number of staff required for the activity  
             - `notes` → (Optional) Any notes or description  
+            - `date` → (Optional) YYYY-MM-DD for an activity that occurs on a specific date
             """)
 
 rota_df = parse_csv(st.file_uploader("📂 Upload Staff Rota CSV", type=["csv"]))
@@ -1230,10 +1294,6 @@ activities_df = parse_csv(
     st.file_uploader("📂 Upload Activities CSV", type=["csv"]))
 bg_file = st.file_uploader("Background Image (optional)",
                            type=["png", "jpg", "jpeg"])
-
-# Load and persist settings
-if "settings" not in st.session_state:
-    st.session_state["settings"] = load_settings()
 
 saved_weekly = st.session_state["settings"].get("weekly_rules",
                                                 "Film Night:Thu:18:00\nDogs for Health:Thu:11:00\nReminiscence:Sat:18:00")
@@ -1363,6 +1423,12 @@ st.write("## Preview & Edit Monthly Calendar")
 
 session_key = f"{year}-{month:02d}"
 
+# Load persisted monthly edits automatically into session state if not present
+if session_key not in st.session_state:
+    loaded = load_monthly_data(year, month)
+    if loaded:
+        st.session_state[session_key] = loaded
+
 # Reset preview when changing month/year
 if "last_preview_year" not in st.session_state or st.session_state.get(
         "last_preview_year") != year or st.session_state.get(
@@ -1387,6 +1453,13 @@ if st.button("Preview Calendar"):
                     t = ev.get("time", "")
                     lines.append(f"{t} {ev['title']}".strip())
             st.session_state[session_key][d] = "\n".join(lines)
+
+        # Persist monthly edits to disk so they survive refresh/logouts
+        try:
+            save_monthly_data(year, month, st.session_state[session_key])
+        except Exception:
+            pass
+
     st.rerun()
 
 if session_key in st.session_state:
@@ -1402,12 +1475,25 @@ if session_key in st.session_state:
                 continue
             d = dt.date(year, month, day)
             with cols[c_idx]:
-                st.text_area(f"{day}",
-                             st.session_state[session_key].get(d, ""),
-                             key=f"{session_key}_{d}", height=180)
+                current_text = st.session_state[session_key].get(d, "")
+                new_text = st.text_area(f"{day}", current_text, key=f"{session_key}_{d}", height=180)
+                # Save edits back to session_state and disk immediately
+                if new_text != current_text:
+                    st.session_state[session_key][d] = new_text
+                    try:
+                        save_monthly_data(year, month, st.session_state[session_key])
+                    except Exception:
+                        pass
 
     if st.button("🔄 Reset This Month's Edits"):
         st.session_state.pop(session_key, None)
+        # remove persisted file as well
+        filename = f"calendar_data_{year}_{month:02d}.json"
+        try:
+            if os.path.exists(filename):
+                os.remove(filename)
+        except Exception:
+            pass
         st.rerun()
 
     # -------------------------
@@ -1421,6 +1507,10 @@ if session_key in st.session_state:
             for k, v in st.session_state.items()
             if k.startswith(session_key + "_")
         }
+        # Fallback: use persisted edits if the above method didn't find any
+        if not edited_texts:
+            edited_texts = st.session_state.get(session_key, {})
+
         pdf_buf = draw_calendar_pdf(title, disclaimer, year, month,
                                     edited_texts, background_bytes=bg_bytes)
         st.success("✅ A3 PDF calendar generated successfully!")
@@ -1900,4 +1990,4 @@ if session_key in st.session_state:
                     mime="application/pdf",
                 )
 
-        # End of file
+# End of file
