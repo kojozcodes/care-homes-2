@@ -5,3 +5,5 @@
 calendar_settings.json
 image_cache
 layout_templates
+calendar_data*.json
+calendar_state*.json

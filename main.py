@@ -103,6 +103,69 @@ def load_monthly_data(year, month):
 
 
 # -------------------------
+# CSV and Settings Persistence
+# -------------------------
+UPLOADS_DIR = "uploaded_csvs"
+os.makedirs(UPLOADS_DIR, exist_ok=True)
+
+
+def save_uploaded_csv(uploaded_file, csv_type, year, month):
+    """Save uploaded CSV file to disk for persistence."""
+    if uploaded_file is None:
+        return None
+    
+    filename = f"{csv_type}_{year}_{month:02d}.csv"
+    filepath = os.path.join(UPLOADS_DIR, filename)
+    
+    try:
+        # Read the uploaded file and save it
+        df = pd.read_csv(uploaded_file)
+        df.to_csv(filepath, index=False)
+        return filepath
+    except Exception as e:
+        st.error(f"Error saving {csv_type} CSV: {e}")
+        return None
+
+
+def load_saved_csv(csv_type, year, month):
+    """Load previously saved CSV file."""
+    filename = f"{csv_type}_{year}_{month:02d}.csv"
+    filepath = os.path.join(UPLOADS_DIR, filename)
+    
+    if os.path.exists(filepath):
+        try:
+            return pd.read_csv(filepath)
+        except Exception as e:
+            st.warning(f"Could not load saved {csv_type} CSV: {e}")
+            return None
+    return None
+
+
+def save_calendar_state(year, month, state_data):
+    """Save complete calendar state including settings and metadata."""
+    filename = f"calendar_state_{year}_{month:02d}.json"
+    try:
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(state_data, f, indent=2)
+        return True
+    except Exception as e:
+        st.error(f"Error saving calendar state: {e}")
+        return False
+
+
+def load_calendar_state(year, month):
+    """Load complete calendar state."""
+    filename = f"calendar_state_{year}_{month:02d}.json"
+    if os.path.exists(filename):
+        try:
+            with open(filename, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            st.warning(f"Could not load calendar state: {e}")
+            return {}
+    return {}
+
+# -------------------------
 # Activity Keyword Mapping
 # -------------------------
 # Keywords that should take priority when found in activity names
@@ -302,11 +365,15 @@ def seat_activity_into_calendar(year, month, activities_df, rota_df, rules,
             pref_days = [p.strip()[:3].lower() for p in pref_days if p.strip()]
             pref_time = str(r.get("preferred_time", "")).strip()
             freq = int(r.get("frequency", 0)) if str(r.get("frequency", "")).isdigit() else 0
+            
+            # NEW: Get interval and week_type for fortnightly support
+            interval = int(r.get("interval", 1)) if str(r.get("interval", "")).isdigit() else 1
+            week_type = str(r.get("week_type", "")).strip().lower()  # 'odd' or 'even'
+            
             placed = 0
 
-            # ---- NEW: support specific date column in activities CSV ----
+            # ---- Support specific date column in activities CSV ----
             activity_date_raw = None
-            # r can be a Series with index; check both 'date' key and column existence
             if isinstance(r, pd.Series):
                 if "date" in r.index:
                     activity_date_raw = r.get("date")
@@ -328,15 +395,42 @@ def seat_activity_into_calendar(year, month, activities_df, rota_df, rules,
                     activities.append({"date": specific_date, "time": pref_time, "title": name, "notes": "activity"})
                 # Skip the standard preferred-day logic for date-specific entries
                 continue
-            # ---- END NEW BLOCK ----
+            # ---- END specific date block ----
 
+            # ---- Standard scheduling with interval support ----
             for d in sorted(daymap.keys()):
                 if freq and placed >= freq:
                     break
+                    
                 dow3 = calendar.day_name[d.weekday()][:3].lower()
-                if dow3 in pref_days:
-                    activities.append({"date": d, "time": pref_time, "title": name, "notes": "activity"})
-                    placed += 1
+                
+                # Check if day of week matches
+                if dow3 not in pref_days:
+                    continue
+                
+                # If interval is 2 (fortnightly), check week number
+                if interval == 2:
+                    # Get ISO week number (1-53)
+                    week_num = d.isocalendar()[1]
+                    
+                    # Check if week_type matches
+                    if week_type == "odd" and week_num % 2 == 0:
+                        continue
+                    elif week_type == "even" and week_num % 2 == 1:
+                        continue
+                    # If no week_type specified, alternate based on first occurrence
+                    elif not week_type:
+                        if placed == 0:
+                            # First placement - remember which week type
+                            pass
+                        else:
+                            # Check if enough weeks have passed
+                            # This is approximate - counts placements
+                            if placed > 0:
+                                continue
+                
+                activities.append({"date": d, "time": pref_time, "title": name, "notes": "activity"})
+                placed += 1
 
     # Normalize times and dedupe
     time_pattern = re.compile(r"^(\d{1,2})(?::?(\d{2}))?$")
@@ -1240,19 +1334,16 @@ if not st.session_state.logged_in:
 if "settings" not in st.session_state:
     st.session_state["settings"] = load_settings()
 
-# Important Notice Alert
-st.warning("""
-### ⚠️ Important Notice
-**Fiverr Account Suspension:** My Fiverr account has been permanently suspended due to a "suspicious clone account" issue. 
-This is beyond my control, but I remain committed to supporting you.
-
-**For continued support and updates, please contact me directly at:**  
-📧 **hamza.ahmed.ws@gmail.com**
-
-Thank you for your understanding and patience.
-""")
-
 st.title("🏡 Care Home Monthly Activities – Editable Preview & A3 PDF")
+
+# Display save status
+if "last_save_time" in st.session_state:
+    save_time = st.session_state["last_save_time"]
+    time_ago = (dt.datetime.now() - save_time).total_seconds()
+    if time_ago < 60:
+        st.success(f"✅ Auto-saved {int(time_ago)} seconds ago")
+    else:
+        st.info(f"💾 Last saved {int(time_ago/60)} minutes ago")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -1284,14 +1375,75 @@ with st.expander("🎯 Activities CSV Format (Example)"):
             - `preferred_days` → Day(s) of week, separated by `;` (e.g. `Mon; Wed; Fri`)  
             - `preferred_time` → Start time (e.g. `14:30`)  
             - `frequency` → Number of times per month  
+            - `interval` → (Optional) For fortnightly: use `2` (every 2 weeks), leave empty for weekly
+            - `week_type` → (Optional) For fortnightly: use `odd` or `even` (based on week number)
             - `staff_required` → Number of staff required for the activity  
             - `notes` → (Optional) Any notes or description  
-            - `date` → (Optional) YYYY-MM-DD for an activity that occurs on a specific date
+            - `date` → (Optional) YYYY-MM-DD for an activity that occurs on a specific date (overrides other scheduling)
+            
+            **Examples:**
+            - Weekly activity: frequency=4, preferred_days=Mon
+            - Fortnightly activity: frequency=2, preferred_days=Mon, interval=2
+            - Specific date activity: name=Christmas Party, date=2025-12-25
             """)
 
-rota_df = parse_csv(st.file_uploader("📂 Upload Staff Rota CSV", type=["csv"]))
-activities_df = parse_csv(
-    st.file_uploader("📂 Upload Activities CSV", type=["csv"]))
+# Load saved CSVs if they exist
+session_key = f"{year}-{month:02d}"
+saved_rota = load_saved_csv("rota", year, month)
+saved_activities = load_saved_csv("activities", year, month)
+
+# CSV Upload with persistence
+st.markdown("### 📤 Upload or Use Saved CSV Files")
+
+col_rota, col_activities = st.columns(2)
+
+with col_rota:
+    st.markdown("**Staff Rota CSV**")
+    if saved_rota is not None:
+        st.success(f"✅ Using saved rota ({len(saved_rota)} rows)")
+        if st.button("🔄 Upload New Rota"):
+            st.session_state["upload_new_rota"] = True
+            st.rerun()
+    
+    if saved_rota is None or st.session_state.get("upload_new_rota", False):
+        uploaded_rota = st.file_uploader("📂 Upload Staff Rota CSV", type=["csv"], key="rota_upload")
+        if uploaded_rota:
+            rota_df = parse_csv(uploaded_rota)
+            if rota_df is not None:
+                # Save the uploaded CSV
+                save_uploaded_csv(uploaded_rota, "rota", year, month)
+                st.session_state["upload_new_rota"] = False
+                st.success("Rota CSV saved!")
+                st.rerun()
+        else:
+            rota_df = None
+    else:
+        rota_df = saved_rota
+
+with col_activities:
+    st.markdown("**Activities CSV**")
+    if saved_activities is not None:
+        st.success(f"✅ Using saved activities ({len(saved_activities)} rows)")
+        if st.button("🔄 Upload New Activities"):
+            st.session_state["upload_new_activities"] = True
+            st.rerun()
+    
+    if saved_activities is None or st.session_state.get("upload_new_activities", False):
+        uploaded_activities = st.file_uploader("📂 Upload Activities CSV", type=["csv"], key="activities_upload")
+        if uploaded_activities:
+            activities_df = parse_csv(uploaded_activities)
+            if activities_df is not None:
+                # Save the uploaded CSV
+                save_uploaded_csv(uploaded_activities, "activities", year, month)
+                st.session_state["upload_new_activities"] = False
+                st.success("Activities CSV saved!")
+                st.rerun()
+        else:
+            activities_df = None
+    else:
+        activities_df = saved_activities
+
+# Background image (optional, not persisted)
 bg_file = st.file_uploader("Background Image (optional)",
                            type=["png", "jpg", "jpeg"])
 
@@ -1415,6 +1567,74 @@ if include_holidays:
 
         st.session_state["selected_holidays"] = list(current_selection)
 
+st.markdown("---")
+st.markdown("### 💾 Calendar Management")
+
+col_save, col_load, col_delete = st.columns(3)
+
+with col_save:
+    if st.button("💾 Save Complete Calendar State", type="primary"):
+        if session_key in st.session_state:
+            state_data = {
+                "calendar_data": {d.isoformat(): v for d, v in st.session_state[session_key].items()},
+                "has_rota": rota_df is not None,
+                "has_activities": activities_df is not None,
+                "include_holidays": include_holidays,
+                "selected_holidays": st.session_state.get("selected_holidays", []),
+                "weekly_rules": fixed_rules_text,
+                "daily_rules": daily_rules_text,
+                "last_updated": dt.datetime.now().isoformat()
+            }
+            if save_calendar_state(year, month, state_data):
+                st.success("✅ Calendar state saved successfully!")
+                st.session_state["last_save_time"] = dt.datetime.now()
+            else:
+                st.error("❌ Failed to save calendar state")
+        else:
+            st.warning("⚠️ No calendar data to save. Please generate preview first.")
+
+with col_load:
+    if st.button("📂 Load Saved Calendar"):
+        loaded_state = load_calendar_state(year, month)
+        if loaded_state and loaded_state.get("calendar_data"):
+            try:
+                calendar_data = {dt.date.fromisoformat(k): v for k, v in loaded_state["calendar_data"].items()}
+                st.session_state[session_key] = calendar_data
+                
+                if "selected_holidays" in loaded_state:
+                    st.session_state["selected_holidays"] = loaded_state["selected_holidays"]
+                
+                st.success(f"✅ Calendar loaded from {loaded_state.get('last_updated', 'unknown time')}")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error loading calendar: {e}")
+        else:
+            st.info("ℹ️ No saved calendar found for this month")
+
+with col_delete:
+    if st.button("🗑️ Delete Saved Data", type="secondary"):
+        # Delete calendar data
+        filename = f"calendar_data_{year}_{month:02d}.json"
+        state_filename = f"calendar_state_{year}_{month:02d}.json"
+        rota_file = os.path.join(UPLOADS_DIR, f"rota_{year}_{month:02d}.csv")
+        activities_file = os.path.join(UPLOADS_DIR, f"activities_{year}_{month:02d}.csv")
+        
+        deleted_files = []
+        for file in [filename, state_filename, rota_file, activities_file]:
+            if os.path.exists(file):
+                try:
+                    os.remove(file)
+                    deleted_files.append(file)
+                except Exception:
+                    pass
+        
+        if deleted_files:
+            st.success(f"🗑️ Deleted {len(deleted_files)} file(s)")
+            st.session_state.pop(session_key, None)
+            st.rerun()
+        else:
+            st.info("ℹ️ No saved data to delete")
+
 # -------------------------
 # Editable Preview
 # -------------------------
@@ -1435,6 +1655,24 @@ if "last_preview_year" not in st.session_state or st.session_state.get(
         "last_preview_month") != month:
     st.session_state["last_preview_year"] = year
     st.session_state["last_preview_month"] = month
+
+# Auto-load calendar state if it exists and preview hasn't been generated yet
+if session_key not in st.session_state:
+    loaded_state = load_calendar_state(year, month)
+    if loaded_state and loaded_state.get("calendar_data"):
+        st.info("📂 Found saved calendar data for this month. Loading...")
+        try:
+            # Reconstruct the calendar data
+            calendar_data = {dt.date.fromisoformat(k): v for k, v in loaded_state["calendar_data"].items()}
+            st.session_state[session_key] = calendar_data
+            
+            # Restore other settings
+            if "selected_holidays" in loaded_state:
+                st.session_state["selected_holidays"] = loaded_state["selected_holidays"]
+            
+            st.success(f"✅ Loaded saved calendar from {loaded_state.get('last_updated', 'unknown time')}")
+        except Exception as e:
+            st.warning(f"Could not fully restore calendar state: {e}")
 
 if st.button("Preview Calendar"):
     with st.spinner("Generating preview..."):
@@ -1482,8 +1720,19 @@ if session_key in st.session_state:
                     st.session_state[session_key][d] = new_text
                     try:
                         save_monthly_data(year, month, st.session_state[session_key])
-                    except Exception:
-                        pass
+                        # Also save complete state
+                        state_data = {
+                            "calendar_data": {d.isoformat(): v for d, v in st.session_state[session_key].items()},
+                            "has_rota": rota_df is not None,
+                            "has_activities": activities_df is not None,
+                            "include_holidays": include_holidays,
+                            "selected_holidays": st.session_state.get("selected_holidays", []),
+                            "last_updated": dt.datetime.now().isoformat()
+                        }
+                        save_calendar_state(year, month, state_data)
+                        st.session_state["last_save_time"] = dt.datetime.now()
+                    except Exception as e:
+                        st.error(f"Auto-save failed: {e}")
 
     if st.button("🔄 Reset This Month's Edits"):
         st.session_state.pop(session_key, None)
