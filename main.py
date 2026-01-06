@@ -120,10 +120,44 @@ def save_uploaded_csv(uploaded_file, csv_type, year, month):
     try:
         # Read the uploaded file and save it
         df = pd.read_csv(uploaded_file)
+        
+        # Validate the CSV has data
+        if df.empty:
+            st.error(f"❌ {csv_type} CSV is empty. Please add data to your file.")
+            return None
+        
+        # Check for required columns based on type
+        if csv_type == "rota":
+            required_cols = ["date", "staff", "shift_start", "shift_end"]
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                st.error(f"❌ Staff Rota CSV is missing required columns: {', '.join(missing_cols)}")
+                st.info(f"📋 Your columns: {', '.join(df.columns.tolist())}")
+                return None
+                
+        elif csv_type == "activities":
+            required_cols = ["name", "preferred_days", "preferred_time", "frequency"]
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                st.error(f"❌ Activities CSV is missing required columns: {', '.join(missing_cols)}")
+                st.info(f"📋 Your columns: {', '.join(df.columns.tolist())}")
+                return None
+        
+        # Save the file
         df.to_csv(filepath, index=False)
+        st.success(f"✅ {csv_type.title()} CSV validated and saved successfully! ({len(df)} rows)")
         return filepath
+        
+    except pd.errors.EmptyDataError:
+        st.error(f"❌ {csv_type} CSV file is empty or has no data rows.")
+        st.info("💡 Make sure your CSV has:\n1. Column headers in the first row\n2. At least one data row")
+        return None
+    except pd.errors.ParserError as e:
+        st.error(f"❌ {csv_type} CSV parsing error: {str(e)}")
+        st.info("💡 Check that your CSV is properly formatted with commas separating columns")
+        return None
     except Exception as e:
-        st.error(f"Error saving {csv_type} CSV: {e}")
+        st.error(f"❌ Error saving {csv_type} CSV: {str(e)}")
         return None
 
 
