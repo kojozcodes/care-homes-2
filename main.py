@@ -578,10 +578,15 @@ def draw_calendar_pdf(title, disclaimer, year, month, cell_texts, background_byt
     disc_text_y = disc_y + (disc_h / 2) - (disclaimer_size / 3)
     c.drawCentredString(width / 2, disc_text_y, disclaimer_text)
 
-    # Grid variables
+# Grid variables - calculate rows dynamically
     left, right, top, bottom = 4 * mm, 4 * mm, 37 * mm, 5 * mm
     grid_w = width - left - right
-    cols, rows = 7, 5
+    cols = 7
+    
+    # Count actual number of week rows needed for this month
+    month_calendar = calendar.monthcalendar(year, month)
+    rows = len(month_calendar)  # Will be 4, 5, or 6
+    
     col_w = grid_w / cols
 
     # Weekday header bar
@@ -599,15 +604,24 @@ def draw_calendar_pdf(title, disclaimer, year, month, cell_texts, background_byt
 
     bar_gap = 1.5 * mm
     top_of_grid = bar_y - bar_gap
+    
+    # Calculate available height and adjust based on number of rows
+    # Reserve more bottom margin for months with more rows
+    if rows == 6:
+        bottom = 8 * mm  # Extra space for 6-row months
+    elif rows == 5:
+        bottom = 6 * mm
+    else:
+        bottom = 5 * mm
+    
     grid_h = top_of_grid - bottom
-    row_h = grid_h / rows
+    row_h = grid_h / rows  # Dynamically adjust row height
 
     cream = Color(1, 1, 1, alpha=0.93)
     staff_blue = Color(0, 0.298, 0.6)
-    month_days = calendar.monthcalendar(year, month)
 
-    # Draw cells
-    for r_idx, week in enumerate(month_days):
+    # Draw cells (use the month_calendar we already generated)
+    for r_idx, week in enumerate(month_calendar):
         for c_idx, day in enumerate(week):
             if day == 0:
                 continue
