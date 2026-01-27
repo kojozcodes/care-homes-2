@@ -14,6 +14,7 @@ Features:
 - Pexels API integration with 5 image options per activity
 - Interactive image selection and layout editor
 - Persisted monthly edits and saved default rules
+- Adjustable text sizes for weekly calendar
 """
 
 import streamlit as st
@@ -942,22 +943,33 @@ def get_default_image_layout(num_images, page_width, page_height):
     return layouts
 
 
-def draw_weekly_page_with_custom_layout(c, width, height, day_obj, text, image_bytes_list=None, image_layouts=None):
+def draw_weekly_page_with_custom_layout(c, width, height, day_obj, text, image_bytes_list=None, image_layouts=None, text_sizes=None):
     """
     Draw a single day page on A4 landscape with custom positioned images.
     image_bytes_list: list of up to 3 image bytes
     image_layouts: list of dicts with x, y, width, height for each image
+    text_sizes: dict with font sizes for different elements
     """
+    # Default text sizes if not provided
+    if text_sizes is None:
+        text_sizes = {
+            "day_heading": 40,
+            "disclaimer": 12,
+            "staff": 15,
+            "activities": 22,
+            "holidays": 15
+        }
+    
     # Define layout areas
     text_area_right = width * 0.62  # Text takes left 62%
 
     # Draw day heading (LEFT ALIGNED)
-    c.setFont("Helvetica-Bold", 40)
+    c.setFont("Helvetica-Bold", text_sizes["day_heading"])
     day_str = f"{calendar.day_name[day_obj.weekday()]} {day_obj.day} {calendar.month_name[day_obj.month]}"
     c.drawString(10 * mm, height - 20 * mm, day_str)
 
     # Draw disclaimer (LEFT ALIGNED)
-    c.setFont("Helvetica-Oblique", 12)
+    c.setFont("Helvetica-Oblique", text_sizes["disclaimer"])
     disclaimer_text = (
         "Activities may change due to unforeseen circumstances. "
         "Families are welcome to join. "
@@ -971,7 +983,7 @@ def draw_weekly_page_with_custom_layout(c, width, height, day_obj, text, image_b
     for word in words:
         test_line = (current_line + " " + word).strip()
         if c.stringWidth(test_line, "Helvetica-Oblique",
-                         12) > max_text_width and current_line:
+                         text_sizes["disclaimer"]) > max_text_width and current_line:
             wrapped_lines.append(current_line)
             current_line = word
         else:
@@ -1032,7 +1044,7 @@ def draw_weekly_page_with_custom_layout(c, width, height, day_obj, text, image_b
         for word in words:
             test_line = (current_line + " " + word).strip()
             if c.stringWidth(test_line, "Helvetica-Oblique",
-                             15) > max_width and current_line:
+                             text_sizes["staff"]) > max_width and current_line:
                 wrapped_staff.append(current_line)
                 current_line = word
             else:
@@ -1040,7 +1052,7 @@ def draw_weekly_page_with_custom_layout(c, width, height, day_obj, text, image_b
         if current_line:
             wrapped_staff.append(current_line)
 
-        c.setFont("Helvetica-Oblique", 15)
+        c.setFont("Helvetica-Oblique", text_sizes["staff"])
         c.setFillColor(staff_blue)
         for wrapped in wrapped_staff:
             c.drawString(10 * mm, y, wrapped)
@@ -1062,14 +1074,14 @@ def draw_weekly_page_with_custom_layout(c, width, height, day_obj, text, image_b
             combined_text = (" / ".join(
                 desc_list) if time is None else f"{time}: " + " / ".join(
                 desc_list))
-            font_size = 15
+            font_size = text_sizes["holidays"]
             c.setFont("Helvetica-Bold", font_size)
             c.setFillColor(black)
         else:
             combined_text = (" → ".join(
                 desc_list) if time is None else f"{time}: " + " → ".join(
                 desc_list))
-            font_size = 22
+            font_size = text_sizes["activities"]
             c.setFont("Helvetica-Bold", font_size)
             c.setFillColor(Color(0.1, 0.1, 0.1))
 
@@ -1101,11 +1113,23 @@ def draw_weekly_page_with_custom_layout(c, width, height, day_obj, text, image_b
 
 def create_preview_image_with_layout(width, height, day_obj, text,
                                      image_bytes_list=None,
-                                     image_layouts=None):
+                                     image_layouts=None,
+                                     text_sizes=None):
     """
     Create a preview image using PIL that matches the PDF layout exactly.
     Returns PIL Image object.
+    text_sizes: dict with font sizes for different elements
     """
+    # Default text sizes if not provided
+    if text_sizes is None:
+        text_sizes = {
+            "day_heading": 40,
+            "disclaimer": 12,
+            "staff": 15,
+            "activities": 22,
+            "holidays": 15
+        }
+    
     # Create white background
     img = Image.new('RGB', (int(width), int(height)), color='white')
     draw = ImageDraw.Draw(img)
@@ -1116,15 +1140,15 @@ def create_preview_image_with_layout(width, height, day_obj, text,
     # Try to load fonts (matching PDF sizes)
     try:
         title_font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", text_sizes["day_heading"])
         disclaimer_font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf", 12)
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf", text_sizes["disclaimer"])
         staff_font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf", 15)
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf", text_sizes["staff"])
         activity_font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", text_sizes["activities"])
         holiday_font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 15)
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", text_sizes["holidays"])
     except:
         # Fallback to default fonts with approximate sizes
         title_font = ImageFont.load_default()
@@ -1520,6 +1544,15 @@ saved_weekly = st.session_state["settings"].get("weekly_rules",
 saved_daily = st.session_state["settings"].get("daily_rules",
                                                "Morning Exercise:09:00\nNews Headlines:10:00")
 
+# Text size settings for weekly calendar
+text_sizes = st.session_state["settings"].get("text_sizes", {
+    "day_heading": 40,
+    "disclaimer": 12,
+    "staff": 15,
+    "activities": 22,
+    "holidays": 15
+})
+
 fixed_rules_text = st.text_area(
     "Fixed Weekly Rules (e.g. Film Night:Thu:18:00)",
     value=saved_weekly, key="weekly_rules_input")
@@ -1843,6 +1876,79 @@ if session_key in st.session_state:
     # -------------------------
     st.markdown("---")
     st.write("## Weekly Exports (A4 Landscape)")
+    
+    # -------------------------
+    # Text size controls for weekly calendar
+    # -------------------------
+    st.markdown("### 🔤 Weekly Calendar Text Sizes")
+    st.info("Adjust the font sizes for different elements in the weekly calendar. You'll see the changes in the preview below.")
+
+    col_text1, col_text2, col_text3 = st.columns(3)
+
+    with col_text1:
+        day_heading_size = st.slider(
+            "Day Heading Size",
+            min_value=20,
+            max_value=60,
+            value=text_sizes["day_heading"],
+            step=2,
+            help="Size of the day heading (e.g., 'Monday 15 January')"
+        )
+        
+        disclaimer_size = st.slider(
+            "Disclaimer Text Size",
+            min_value=8,
+            max_value=18,
+            value=text_sizes["disclaimer"],
+            step=1,
+            help="Size of the disclaimer text at the top"
+        )
+
+    with col_text2:
+        staff_size = st.slider(
+            "Staff Names Size",
+            min_value=10,
+            max_value=25,
+            value=text_sizes["staff"],
+            step=1,
+            help="Size of staff member names"
+        )
+        
+        activities_size = st.slider(
+            "Activity Text Size",
+            min_value=14,
+            max_value=36,
+            value=text_sizes["activities"],
+            step=2,
+            help="Size of activity names - this is the main text residents will read"
+        )
+
+    with col_text3:
+        holidays_size = st.slider(
+            "Holiday Text Size",
+            min_value=10,
+            max_value=28,
+            value=text_sizes["holidays"],
+            step=1,
+            help="Size of holiday/special event names"
+        )
+
+    # Update text_sizes dict with current slider values
+    text_sizes = {
+        "day_heading": day_heading_size,
+        "disclaimer": disclaimer_size,
+        "staff": staff_size,
+        "activities": activities_size,
+        "holidays": holidays_size
+    }
+
+    if st.button("💾 Save Text Size Preferences"):
+        st.session_state["settings"]["text_sizes"] = text_sizes
+        save_settings(st.session_state["settings"])
+        st.success("✅ Text size preferences saved!")
+    
+    st.markdown("---")
+    
     weeks = get_weeks_in_month(year, month)
     if not weeks:
         st.info("No week ranges found for this month.")
@@ -2000,7 +2106,7 @@ if session_key in st.session_state:
                         with cols[img_idx]:
                             st.image(img_bytes,
                                      caption=f"Option {img_idx + 1}",
-                                     use_container_width=True)
+                                     width='stretch')
                             if st.button(f"Select",
                                          key=f"select_{activity_key}_{img_idx}"):
                                 st.session_state.selected_images[
@@ -2158,9 +2264,9 @@ if session_key in st.session_state:
                 st.markdown("### 📄 Step 3: Live Preview")
                 preview_img = create_preview_image_with_layout(
                     page_width, page_height, current_day, text,
-                    images_list, current_layouts
+                    images_list, current_layouts, text_sizes
                 )
-                st.image(preview_img, use_container_width=True,
+                st.image(preview_img, width='stretch',
                          caption=f"Day {st.session_state.preview_day_idx + 1} of {total_days}")
 
             elif not images_list:
@@ -2219,7 +2325,7 @@ if session_key in st.session_state:
 
                     draw_weekly_page_with_custom_layout(c, width, height, d,
                                                         text, images_list,
-                                                        layouts)
+                                                        layouts, text_sizes)
                     c.showPage()
 
                 c.save()
@@ -2283,7 +2389,7 @@ if session_key in st.session_state:
                         draw_weekly_page_with_custom_layout(c, width, height,
                                                             d, text,
                                                             images_list,
-                                                            layouts)
+                                                            layouts, text_sizes)
                         c.showPage()
 
                     c.save()
